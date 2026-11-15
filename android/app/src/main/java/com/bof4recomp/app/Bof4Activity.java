@@ -1,6 +1,7 @@
 package com.bof4recomp.app;
 
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Insets;
 import android.media.AudioManager;
 import android.os.Build;
@@ -19,6 +20,7 @@ import android.view.WindowManager;
 import org.libsdl.app.SDLActivity;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.util.Locale;
 
 /**
@@ -31,6 +33,7 @@ import java.util.Locale;
 public class Bof4Activity extends SDLActivity {
     private static final String TAG = "Bof4Activity";
     private File dataDir;
+    private boolean redirectedToSetup;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -38,6 +41,7 @@ public class Bof4Activity extends SDLActivity {
         if (!dataDir.exists()) {
             dataDir.mkdirs();
         }
+        writeLaunchFlag(dataDir);
         exportEnvironment(dataDir);
 
         Window win = getWindow();
@@ -73,6 +77,25 @@ public class Bof4Activity extends SDLActivity {
     }
 
     @Override
+    public void finish() {
+        // If native startup failed and wrote bof4_last_error.txt (or never reached
+        // frame 1 so bof4_launching.flag is still present), return to DiscSetupActivity
+        // so the player sees the exact diagnostic log instead of a silent close.
+        if (!redirectedToSetup && dataDir != null) {
+            File errFile = new File(dataDir, DiscSetupActivity.LAST_ERROR_FILE);
+            File flagFile = new File(dataDir, DiscSetupActivity.LAUNCH_FLAG_FILE);
+            if (errFile.isFile() || flagFile.isFile()) {
+                redirectedToSetup = true;
+                Intent i = new Intent(this, DiscSetupActivity.class);
+                i.putExtra(DiscSetupActivity.EXTRA_SHOW_ERROR, true);
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                startActivity(i);
+            }
+        }
+        super.finish();
+    }
+
+    @Override
     protected String[] getLibraries() {
         return new String[] { "SDL2", "bof4" };
     }
@@ -99,6 +122,14 @@ public class Bof4Activity extends SDLActivity {
             return ext;
         }
         return ctx.getFilesDir();
+    }
+
+    private static void writeLaunchFlag(File dir) {
+        try (FileOutputStream fos = new FileOutputStream(new File(dir, DiscSetupActivity.LAUNCH_FLAG_FILE))) {
+            fos.write("launching\n".getBytes());
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to write launch flag", e);
+        }
     }
 
     private void exportEnvironment(File dir) {

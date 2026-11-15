@@ -38,10 +38,12 @@ PERF_PROFILE_KEYS := [Perf_Profile]string {
 	.Battery  = "battery",
 }
 
-// Tracks whether the user explicitly set [window] detail in bof4.ini so Auto
-// mode never overrides a deliberate user preference.
+// Tracks whether the user explicitly set [window] detail or hardware in
+// bof4.ini so Android safe defaults never override a deliberate user preference.
 @(private)
 config_detail_explicit: bool
+@(private)
+config_hardware_explicit: bool
 
 // Apply pre-init thread/pacing tuning (called from qol.boot() before
 // host.platform_init starts the raster thread pool).
@@ -49,6 +51,20 @@ config_detail_explicit: bool
 mobile_opt_boot :: proc() {
 	if core.headless {
 		return
+	}
+	// On Android, default to the fast NEON-accelerated software renderer at
+	// Detail x1 unless the user explicitly enabled Vulkan hardware rendering
+	// in bof4.ini. Many mobile Vulkan 1.3 drivers reject desktop-class SPIR-V
+	// features or large contiguous staging buffers and abort via vk_check.
+	when ODIN_PLATFORM_SUBTARGET == .Android {
+		if !config_hardware_explicit {
+			config.window_hardware = false
+		}
+		if !config_detail_explicit && !config.window_hardware {
+			config.window.detail = .X1
+			config.window_bloom_effects = false
+			config.window_depth_of_field = false
+		}
 	}
 	// Optional BOF4_RASTER_THREADS environment override.
 	if s := os.get_env("BOF4_RASTER_THREADS", context.temp_allocator); s != "" {

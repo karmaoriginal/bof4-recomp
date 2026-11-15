@@ -26,3 +26,15 @@ set(SDL_VULKAN ON CACHE BOOL "" FORCE)
 set(SDL_OPENGLES ON CACHE BOOL "" FORCE)
 
 add_subdirectory("${SDL2_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/sdl2-build" EXCLUDE_FROM_ALL)
+
+# Android's dynamic linker requires exact unversioned SONAME (libSDL2.so) and
+# 16 KB ELF segment alignment for Android 15+ devices.
+set_target_properties(SDL2 PROPERTIES
+    VERSION ""
+    SOVERSION ""
+    NO_SONAME FALSE
+)
+target_link_options(SDL2 PRIVATE
+    "-Wl,-soname,libSDL2.so"
+    "-Wl,-z,max-page-size=16384"
+)

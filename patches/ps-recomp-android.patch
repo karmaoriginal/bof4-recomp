@@ -1,3 +1,79 @@
+diff --git a/core/disc/disc.odin b/core/disc/disc.odin
+index 49456c3..24d0515 100644
+--- a/core/disc/disc.odin
++++ b/core/disc/disc.odin
+@@ -122,6 +122,39 @@ Cue_Track :: struct {
+ // earlier ones plus its first track's PREGAP, or plus two seconds when its
+ // gap is not in the file either (no INDEX 00, INDEX 01 at its start), as a
+ // disc's tracks are spaced.
++// Open a FILE referenced by a .cue sheet, falling back to its basename and
++// case-insensitive matching inside dir (handles Windows-authored .cue sheets
++// on Android / Linux case-sensitive filesystems).
++@(private = "file")
++open_cue_file :: proc(dir, name: string) -> (^os.File, bool) {
++	path, _ := filepath.join({dir, name}, context.temp_allocator)
++	if f, err := os.open(path); err == nil {
++		return f, true
++	}
++	base := name
++	if i := strings.last_index_any(base, "/\\"); i >= 0 {
++		base = base[i + 1:]
++	}
++	if base != name {
++		path2, _ := filepath.join({dir, base}, context.temp_allocator)
++		if f, err := os.open(path2); err == nil {
++			return f, true
++		}
++	}
++	search_dir := dir != "" ? dir : "."
++	if entries, derr := os.read_all_directory_by_path(search_dir, context.temp_allocator); derr == nil {
++		for e in entries {
++			if e.type != .Directory && strings.equal_fold(e.name, base) {
++				if f, err := os.open(e.fullpath); err == nil {
++					return f, true
++				}
++			}
++		}
++	}
++	fmt.eprintln("disc: cannot open", path)
++	return nil, false
++}
++
+ @(private = "file")
+ open_cue :: proc(d: ^Disc, cue_path: string) -> bool {
+ 	text, err := os.read_entire_file(cue_path, context.temp_allocator)
+@@ -132,21 +165,25 @@ open_cue :: proc(d: ^Disc, cue_path: string) -> bool {
+ 	dir := filepath.dir(cue_path)
+ 	cue := make([dynamic]Cue_Track, context.temp_allocator)
+ 	s := string(text)
++	if strings.has_prefix(s, "\xef\xbb\xbf") {
++		s = s[3:]
++	}
+ 	for line in strings.split_lines_iterator(&s) {
+ 		l := strings.trim_space(line)
+-		word, _, rest := strings.partition(l, " ")
++		if l == "" {continue}
++		// Split first token on space or tab.
++		sp := strings.index_any(l, " \t")
++		word := sp >= 0 ? l[:sp] : l
++		rest := sp >= 0 ? strings.trim_space(l[sp + 1:]) : ""
+ 		word = strings.to_upper(word, context.temp_allocator)
+-		rest = strings.trim_space(rest)
+ 		switch word {
+ 		case "", "REM", "CATALOG", "CDTEXTFILE", "TITLE", "PERFORMER", "SONGWRITER", "ISRC", "FLAGS", "POSTGAP":
+ 		case "FILE":
+ 			q1 := strings.index_byte(rest, '"')
+ 			q2 := strings.last_index_byte(rest, '"')
+ 			name := q1 >= 0 && q2 > q1 ? rest[q1 + 1:q2] : rest[:max(strings.last_index_byte(rest, ' '), 0)]
+-			path, _ := filepath.join({dir, name}, context.temp_allocator)
+-			f, ferr := os.open(path)
+-			if ferr != nil {
+-				fmt.eprintln("disc: cannot open", path)
++			f, open_ok := open_cue_file(dir, name)
++			if !open_ok {
+ 				return false
+ 			}
+ 			append(&d.files, f)
 diff --git a/core/spin.odin b/core/spin.odin
 index d09db61..05f9c89 100644
 --- a/core/spin.odin
@@ -27,7 +103,7 @@ index 65195c2..d5f4009 100644
 -VK_LOADER :: "libvulkan.so.1"
 +VK_LOADER :: "libvulkan.so" when ODIN_PLATFORM_SUBTARGET == .Android else "libvulkan.so.1"
 diff --git a/psx/host/platform.odin b/psx/host/platform.odin
-index f95efbd..c6ea0c5 100644
+index f95efbd..644a35f 100644
 --- a/psx/host/platform.odin
 +++ b/psx/host/platform.odin
 @@ -5,9 +5,11 @@ import "base:runtime"
@@ -206,7 +282,20 @@ index f95efbd..c6ea0c5 100644
  		}
  	}
  }
-@@ -693,6 +773,7 @@ render_scale_apply :: proc() -> bool {
+@@ -683,6 +763,12 @@ render_scale_apply :: proc() -> bool {
+ 	}
+ 	host.texture = sdl.CreateTexture(host.renderer, .XRGB8888, .STREAMING, w, h)
+ 	host.held = sdl.CreateTexture(host.renderer, .XRGB8888, .STREAMING, w, h)
++	if host.texture == nil || host.held == nil {
++		if host.texture != nil {sdl.DestroyTexture(host.texture)}
++		if host.held != nil {sdl.DestroyTexture(host.held)}
++		host.texture = sdl.CreateTexture(host.renderer, .ARGB8888, .STREAMING, w, h)
++		host.held = sdl.CreateTexture(host.renderer, .ARGB8888, .STREAMING, w, h)
++	}
+ 	if host.texture == nil || host.held == nil {
+ 		fmt.eprintln("SDL_CreateTexture:", sdl.GetError())
+ 		return false
+@@ -693,6 +779,7 @@ render_scale_apply :: proc() -> bool {
  		return false
  	}
  	host.shown_w, host.shown_h = 0, 0
@@ -214,7 +303,7 @@ index f95efbd..c6ea0c5 100644
  	return texture_filter_apply()
  }
  
-@@ -709,18 +790,47 @@ present :: proc() {
+@@ -709,18 +796,47 @@ present :: proc() {
  	}
  	render_scale_apply()
  	host.last_mark, host.frame_mark = host.frame_mark, -1
@@ -271,7 +360,7 @@ index f95efbd..c6ea0c5 100644
  	if hold_picture > 0 {
  		// The picture on screen stays in its texture; the next live one
  		// goes to the other.
-@@ -737,7 +847,7 @@ present :: proc() {
+@@ -737,7 +853,7 @@ present :: proc() {
  		} else if host.fade > 0 {
  			host.fade -= 1
  		}
@@ -280,7 +369,7 @@ index f95efbd..c6ea0c5 100644
  			fw, fh := frame_size()
  			src := sdl.Rect{0, 0, fw, fh}
  			sdl.UpdateTexture(host.texture, &src, &frame_pixels()[0], fw * 4)
-@@ -928,6 +1038,9 @@ platform_frame :: proc() {
+@@ -928,6 +1044,9 @@ platform_frame :: proc() {
  		// RenderPresent already waited for the display; keep the origin
  		// current so sleep pacing resumes from here if vsync goes off.
  		pacing_rebase()
@@ -290,7 +379,7 @@ index f95efbd..c6ea0c5 100644
  		return
  	}
  	due := vblank_due_ns(cpu.presents)
-@@ -936,14 +1049,25 @@ platform_frame :: proc() {
+@@ -936,14 +1055,25 @@ platform_frame :: proc() {
  		if remaining <= 0 {
  			break
  		}
@@ -334,10 +423,22 @@ index 9fb0dc6..e06d08e 100644
  	// The child mixes on its own thread alone, from where the parent's mix
  	// stands.
 diff --git a/psx/host/window.odin b/psx/host/window.odin
-index 24d8bc9..0e5c2d4 100644
+index 24d8bc9..9bd352f 100644
 --- a/psx/host/window.odin
 +++ b/psx/host/window.odin
-@@ -116,6 +116,23 @@ set_fullscreen :: proc(on: bool) -> bool {
+@@ -103,6 +103,11 @@ window_options :: proc() -> Window_Options {
+ 
+ @(private)
+ set_fullscreen :: proc(on: bool) -> bool {
++	when ODIN_PLATFORM_SUBTARGET == .Android {
++		// Android activities own fullscreen state; toggling windowed mode fails on some devices.
++		window.opts.fullscreen = true
++		return true
++	}
+ 	flags := on ? sdl.WINDOW_FULLSCREEN_DESKTOP : sdl.WindowFlags{}
+ 	if sdl.SetWindowFullscreen(host.window, flags) != 0 {
+ 		fmt.eprintln("SDL_SetWindowFullscreen:", sdl.GetError())
+@@ -116,6 +121,23 @@ set_fullscreen :: proc(on: bool) -> bool {
  // reports whether the key was used.
  key_hook: proc(k: sdl.KeyboardEvent) -> bool
  
@@ -361,7 +462,7 @@ index 24d8bc9..0e5c2d4 100644
  // Window keys: fullscreen, pause and the debug snapshot. Reports whether the
  // key was used.
  @(private)
-@@ -217,11 +234,17 @@ draw :: proc() {
+@@ -217,11 +239,17 @@ draw :: proc() {
  			core.capture_frame(pix, w, h, cpu.presents)
  		}
  	}

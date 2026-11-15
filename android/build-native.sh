@@ -188,4 +188,22 @@ for ABI in "${ABI_LIST[@]}"; do
             -extra-linker-flags:"-L$ABI_OUT -lSDL2 -landroid -llog -Wl,-rpath,\$ORIGIN -Wl,-z,max-page-size=16384"
     )
     echo "==> Built $ABI_OUT/libbof4.so"
+
+    # 5. Verify ELF SONAME / NEEDED / SDL_main export with NDK llvm-readelf / llvm-nm
+    LLVM_BIN="$(dirname "$(find "$NDK/toolchains/llvm/prebuilt" -maxdepth 3 -name llvm-readelf -type f | head -n 1)")"
+    if [[ -n "$LLVM_BIN" && -x "$LLVM_BIN/llvm-readelf" ]]; then
+        echo "==> ELF dynamic table for $ABI/libSDL2.so:"
+        "$LLVM_BIN/llvm-readelf" -d "$ABI_OUT/libSDL2.so" | grep -E "SONAME|NEEDED" || true
+        echo "==> ELF dynamic table for $ABI/libbof4.so:"
+        "$LLVM_BIN/llvm-readelf" -d "$ABI_OUT/libbof4.so" | grep -E "SONAME|NEEDED" || true
+        if "$LLVM_BIN/llvm-readelf" -d "$ABI_OUT/libbof4.so" | grep -qE "libSDL2(-2\.0)?\.so\.[0-9]"; then
+            echo "error: libbof4.so links against a versioned libSDL2 SONAME (Android requires libSDL2.so)" >&2
+            exit 1
+        fi
+        if ! "$LLVM_BIN/llvm-nm" -D --defined-only "$ABI_OUT/libbof4.so" | grep -qw "SDL_main"; then
+            echo "error: libbof4.so does not export SDL_main!" >&2
+            exit 1
+        fi
+        echo "==> Verified: libbof4.so links unversioned libSDL2.so and exports SDL_main"
+    fi
 done

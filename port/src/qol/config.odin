@@ -554,7 +554,11 @@ apply_setting :: proc(section, key, value: string) -> bool {
 	case section == "window" && key == "smooth_motion":
 		return parse_bool(value, &config.window_smooth_motion)
 	case section == "window" && key == "hardware":
-		return parse_bool(value, &config.window_hardware)
+		if parse_bool(value, &config.window_hardware) {
+			config_hardware_explicit = true
+			return true
+		}
+		return false
 	case section == "window" && key == "smooth_effects":
 		return parse_bool(value, &config.window_smooth_effects)
 	case section == "window" && key == "smooth_textures":

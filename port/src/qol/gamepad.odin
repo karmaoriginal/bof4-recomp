@@ -103,6 +103,8 @@ gamepad_state: struct {
 	gamepad_active:   bool,
 	// Deferred low-memory flag raised by SDL_APP_LOWMEMORY on the Android UI thread.
 	low_memory_flag:  bool,
+	// True once the first Android vblank succeeded (clears bof4_launching.flag).
+	boot_confirmed:   bool,
 }
 
 // Set critical SDL2 hints BEFORE SDL_Init runs inside host.platform_init.
@@ -198,6 +200,16 @@ gamepad_apply_config :: proc() {
 gamepad_vblank :: proc() {
 	if core.headless || !gamepad_state.initialized {
 		return
+	}
+	when ODIN_PLATFORM_SUBTARGET == .Android {
+		// Clear launch sentinel on the very first rendered vblank so the Android
+		// launcher knows startup succeeded cleanly (no crash-loop recovery needed).
+		if !gamepad_state.boot_confirmed {
+			gamepad_state.boot_confirmed = true
+			if os.exists("bof4_launching.flag") {
+				_ = os.remove("bof4_launching.flag")
+			}
+		}
 	}
 	// Handle deferred Android low-memory trimming safely on the main thread.
 	trim := false

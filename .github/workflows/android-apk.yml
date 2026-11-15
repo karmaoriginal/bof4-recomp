@@ -173,6 +173,15 @@ jobs:
           echo "abis=${ABIS}" >> "$GITHUB_OUTPUT"
           echo "build_type=${BUILD_TYPE}" >> "$GITHUB_OUTPUT"
 
+          python3 -c '
+          import pathlib
+          lines = [ln for ln in pathlib.Path("/tmp/build.log").read_text(errors="replace").splitlines()
+                   if any(k in ln for k in ("SONAME", "NEEDED", "Verified:", "APK ready:", "==> Built"))]
+          msg = "\n".join(lines[-25:]).replace("%","%25").replace("\r","%0D").replace("\n","%0A")
+          if msg:
+              print(f"::notice title=elf-verification::{msg}")
+          '
+
       - name: Upload APK workflow artifact
         uses: actions/upload-artifact@v4
         with:
