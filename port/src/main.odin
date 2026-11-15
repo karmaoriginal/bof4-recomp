@@ -31,6 +31,9 @@ run_bof4 :: proc(disc_dir, cue: string) -> bool {
 	}
 	native_path := core.env("NATIVE_FILE")
 	if native_path == "" {
+		native_path = qol.mods_find_native_override()
+	}
+	if native_path == "" {
 		when ODIN_ARCH == .arm64 {
 			if os.exists("bof4_arm64.native") {
 				native_path = "bof4_arm64.native"

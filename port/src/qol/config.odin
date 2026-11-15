@@ -209,6 +209,9 @@ Config :: struct {
 	window:                host.Window_Options,
 	window_smooth_motion:  bool,
 	window_hardware:       bool,
+	window_backend:        Renderer_Backend,
+	window_fps_limit:      int,
+	window_anti_wobble:    bool,
 	window_smooth_effects: bool,
 	window_smooth_textures: bool,
 	window_bloom_effects:  bool,
@@ -216,6 +219,12 @@ Config :: struct {
 	window_color_grade:    bool,
 	window_vignette:       bool,
 	audio_latency_ms:      int,
+	audio_smooth_fix:      bool,
+	audio_volume:          f64,
+	// Mods & custom texture packs ([mods])
+	mods_enabled:          bool,
+	mods_textures:         bool,
+	mods_dump_textures:    bool,
 	disc_instant_loading:  bool,
 	disc_skip_black:       bool,
 	encounter_rate:        f64,
@@ -297,7 +306,15 @@ Config :: struct {
 config := Config {
 	window                  = {pause_unfocused = true, detail = .X2},
 	window_hardware         = true,
+	window_backend          = .Auto,
+	window_fps_limit        = 60,
+	window_anti_wobble      = true,
 	audio_latency_ms        = 50,
+	audio_smooth_fix        = true,
+	audio_volume            = 1.0,
+	mods_enabled            = true,
+	mods_textures           = true,
+	mods_dump_textures      = false,
 	disc_instant_loading    = true,
 	disc_skip_black         = true,
 	encounter_rate          = 1,
@@ -396,7 +413,27 @@ boot :: proc() -> bool {
 	config_boot = config
 	gamepad_boot_hints()
 	mobile_opt_boot()
+	// Resolve explicit Graphics API backend choice (OpenGL / OpenGL ES vs Vulkan).
+	switch config.window_backend {
+	case .Vulkan:
+		config.window_hardware = true
+	case .OpenGL:
+		config.window_hardware = false
+	case .Auto:
+	}
+	when PS_ANDROID_PATCH {
+		if !config.window_hardware {
+			when ODIN_PLATFORM_SUBTARGET == .Android {
+				host.render_backend = "opengles2"
+			} else {
+				host.render_backend = "opengl"
+			}
+		} else {
+			host.render_backend = ""
+		}
+	}
 	render.hardware_renderer = config.window_hardware
+	config_boot = config
 	return true
 }
 
@@ -413,6 +450,12 @@ init :: proc() -> bool {
 	render.bloom_effects = config.window_bloom_effects
 	render.depth_of_field = config.window_depth_of_field
 	render.vignette = config.window_vignette
+	when PS_ANDROID_PATCH {
+		render.anti_wobble = config.window_anti_wobble
+		core.audio_smooth_fix = config.audio_smooth_fix
+		core.audio_volume = f32(clamp(config.audio_volume, 0.0, 1.0))
+		host.set_fps_limit(i32(config.window_fps_limit))
+	}
 	host.skip_black = config.disc_skip_black
 	core.audio_apply(config.audio_latency_ms)
 	bios.pad_set_rumble(1)
@@ -432,17 +475,20 @@ init :: proc() -> bool {
 	} else {
 		fmt.eprintln("qol: standalone interpreter mode (no recompiled overlays; place bof4.native next to disc for full AOT + QoL hooks)")
 	}
-	// Install unified gamepad/touch input and mobile optimizations after
-	// mouse_menus_init so host.pad_hook chaining is guaranteed.
+	// Install unified gamepad/touch input, mod loader, and mobile optimizations
+	// after mouse_menus_init so host.pad_hook and spu.sector_hook chaining work cleanly.
 	gamepad_init()
 	touch_init()
 	mobile_opt_init()
+	mods_init()
 	return true
 }
 
 // Follow the game's state once per emulated vblank.
 @(private = "file")
 vblank :: proc() {
+	quick_menu_vblank()
+	mods_vblank()
 	gamepad_vblank()
 	touch_vblank()
 	speed_follow_mode()
@@ -559,10 +605,35 @@ apply_setting :: proc(section, key, value: string) -> bool {
 			return true
 		}
 		return false
+	case section == "window" && key == "backend":
+		for name, bk in RENDERER_BACKEND_KEYS {
+			if strings.to_lower(value, context.temp_allocator) == name {
+				config.window_backend = bk
+				if bk != .Auto {
+					config_hardware_explicit = true
+					config.window_hardware = bk == .Vulkan
+				}
+				return true
+			}
+		}
+		return false
+	case section == "window" && key == "fps_limit":
+		v: int
+		if parse_int(value, 0, 240, &v) {
+			config.window_fps_limit = v
+			return true
+		}
+		return false
+	case section == "window" && key == "anti_wobble":
+		return parse_bool(value, &config.window_anti_wobble)
 	case section == "window" && key == "smooth_effects":
 		return parse_bool(value, &config.window_smooth_effects)
 	case section == "window" && key == "smooth_textures":
-		return parse_bool(value, &config.window_smooth_textures)
+		if parse_bool(value, &config.window_smooth_textures) {
+			config_smooth_tex_explicit = true
+			return true
+		}
+		return false
 	case section == "window" && key == "bloom_effects":
 		return parse_bool(value, &config.window_bloom_effects)
 	case section == "window" && key == "depth_of_field":
@@ -574,7 +645,21 @@ apply_setting :: proc(section, key, value: string) -> bool {
 	case section == "window":
 		return apply_window_setting(key, value)
 	case section == "audio" && key == "latency_ms":
-		return parse_int(value, core.AUDIO_LATENCY_MIN, core.AUDIO_LATENCY_MAX, &config.audio_latency_ms)
+		if parse_int(value, core.AUDIO_LATENCY_MIN, core.AUDIO_LATENCY_MAX, &config.audio_latency_ms) {
+			config_audio_latency_explicit = true
+			return true
+		}
+		return false
+	case section == "audio" && key == "smooth_fix":
+		return parse_bool(value, &config.audio_smooth_fix)
+	case section == "audio" && key == "volume":
+		return parse_range(value, 0.0, 1.0, &config.audio_volume)
+	case section == "mods" && key == "enabled":
+		return parse_bool(value, &config.mods_enabled)
+	case section == "mods" && key == "textures":
+		return parse_bool(value, &config.mods_textures)
+	case section == "mods" && key == "dump_textures":
+		return parse_bool(value, &config.mods_dump_textures)
 	case section == "disc" && key == "instant_loading":
 		return parse_bool(value, &config.disc_instant_loading)
 	case section == "disc" && key == "skip_black":
@@ -742,6 +827,7 @@ apply_window_setting :: proc(key, value: string) -> bool {
 		}
 		return true
 	case "filter":
+		config_filter_explicit = true
 		switch value {
 		case "nearest":
 			w.filter = .Nearest

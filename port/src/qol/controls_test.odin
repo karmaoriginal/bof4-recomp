@@ -167,3 +167,127 @@ test_core_buttons_wire_order_and_confirm_swap :: proc(t: ^testing.T) {
 	testing.expect(t, !is_sensor_device_name("Xbox Wireless Controller"), "must accept Xbox controller")
 	testing.expect(t, !is_sensor_device_name("DualSense Wireless Controller"), "must accept DualSense")
 }
+
+@(test)
+test_mod_code_patch_parser :: proc(t: ^testing.T) {
+	// Clean state before & after
+	for p in mods_state.patches {
+		delete(p.bytes)
+	}
+	clear(&mods_state.patches)
+	defer {
+		for p in mods_state.patches {
+			delete(p.bytes)
+		}
+		clear(&mods_state.patches)
+	}
+
+	script := `
+	# Comment line
+	// C++ comment
+	once write32 0x80012340 0x24020063
+	write16 0x80054320 0x03E7 ; inline comment
+	write8  0x80099999 0x7F
+	nop     0x80012344
+	bytes   0x80020000 01 02 0xFF 7A
+	if32 0x80080000 == 0x27BDFFE0 -> write32 0x80080004 0x00000000
+	if16 0x80080010 != 0x0000 -> write16 0x80080012 0x0064
+	D00A1234 0001
+	800A1236 03E7
+	300A1238 00FF
+	`
+	n := parse_patch_text(0, script)
+	testing.expect_value(t, n, 9)
+	testing.expect_value(t, len(mods_state.patches), 9)
+
+	// 0: once write32
+	p0 := mods_state.patches[0]
+	testing.expect(t, p0.once, "once flag")
+	testing.expect_value(t, p0.kind, Mod_Patch_Kind.Write32)
+	testing.expect_value(t, p0.addr, u32(0x80012340))
+	testing.expect_value(t, p0.val, u32(0x24020063))
+
+	// 3: nop
+	p3 := mods_state.patches[3]
+	testing.expect_value(t, p3.kind, Mod_Patch_Kind.Write32)
+	testing.expect_value(t, p3.addr, u32(0x80012344))
+	testing.expect_value(t, p3.val, u32(0))
+
+	// 4: bytes
+	p4 := mods_state.patches[4]
+	testing.expect_value(t, p4.kind, Mod_Patch_Kind.Bytes)
+	testing.expect_value(t, len(p4.bytes), 4)
+	testing.expect_value(t, p4.bytes[2], u8(0xFF))
+
+	// 5: if32 == -> write32
+	p5 := mods_state.patches[5]
+	testing.expect_value(t, p5.cond, Mod_Cond_Kind.Eq32)
+	testing.expect_value(t, p5.cond_addr, u32(0x80080000))
+	testing.expect_value(t, p5.cond_val, u32(0x27BDFFE0))
+	testing.expect_value(t, p5.addr, u32(0x80080004))
+
+	// 7: GameShark D0 + 80
+	p7 := mods_state.patches[7]
+	testing.expect_value(t, p7.cond, Mod_Cond_Kind.Eq16)
+	testing.expect_value(t, p7.cond_addr, u32(0x800A1234))
+	testing.expect_value(t, p7.cond_val, u32(0x0001))
+	testing.expect_value(t, p7.kind, Mod_Patch_Kind.Write16)
+	testing.expect_value(t, p7.addr, u32(0x800A1236))
+	testing.expect_value(t, p7.val, u32(0x03E7))
+
+	// 8: GameShark 30 (unconditional because D0 was consumed by 80)
+	p8 := mods_state.patches[8]
+	testing.expect_value(t, p8.cond, Mod_Cond_Kind.None)
+	testing.expect_value(t, p8.kind, Mod_Patch_Kind.Write8)
+	testing.expect_value(t, p8.val, u32(0xFF))
+}
+
+@(test)
+test_mod_texture_filename_parsers :: proc(t: ^testing.T) {
+	vx, vy, vw, vh, vok := parse_vram_tex_name("320_0_64x128")
+	testing.expect(t, vok, "valid vram filename")
+	testing.expect_value(t, vx, i32(320))
+	testing.expect_value(t, vy, i32(0))
+	testing.expect_value(t, vw, i32(64))
+	testing.expect_value(t, vh, i32(128))
+
+	_, _, _, _, bad_v := parse_vram_tex_name("320_0_0x64")
+	testing.expect(t, !bad_v, "zero width must be rejected")
+
+	tx, ty, cx, cy, u0, v0, cw, ch, cok := parse_coord_tex_name("320_0_0_480_16_32_64x64")
+	testing.expect(t, cok, "valid coord filename")
+	testing.expect_value(t, tx, i32(320))
+	testing.expect_value(t, ty, i32(0))
+	testing.expect_value(t, cx, i32(0))
+	testing.expect_value(t, cy, i32(480))
+	testing.expect_value(t, u0, i32(16))
+	testing.expect_value(t, v0, i32(32))
+	testing.expect_value(t, cw, i32(64))
+	testing.expect_value(t, ch, i32(64))
+}
+
+@(test)
+test_quick_menu_config_parsing :: proc(t: ^testing.T) {
+	saved := config
+	defer config = saved
+
+	testing.expect(t, apply_setting("window", "fps_limit", "120"), "fps_limit 120")
+	testing.expect_value(t, config.window_fps_limit, 120)
+	testing.expect(t, apply_setting("window", "fps_limit", "0"), "fps_limit unlimited")
+	testing.expect_value(t, config.window_fps_limit, 0)
+	testing.expect(t, apply_setting("window", "backend", "opengl"), "backend opengl")
+	testing.expect_value(t, config.window_backend, Renderer_Backend.OpenGL)
+	testing.expect_value(t, config.window_hardware, false)
+	testing.expect(t, apply_setting("window", "backend", "vulkan"), "backend vulkan")
+	testing.expect_value(t, config.window_backend, Renderer_Backend.Vulkan)
+	testing.expect_value(t, config.window_hardware, true)
+	testing.expect(t, apply_setting("window", "anti_wobble", "false"), "anti_wobble false")
+	testing.expect_value(t, config.window_anti_wobble, false)
+	testing.expect(t, apply_setting("audio", "smooth_fix", "true"), "audio smooth_fix")
+	testing.expect(t, apply_setting("audio", "volume", "0.7"), "audio volume")
+	testing.expect(t, apply_setting("mods", "enabled", "true"), "mods enabled")
+	testing.expect(t, apply_setting("mods", "textures", "true"), "mods textures")
+	testing.expect(t, apply_setting("mods", "dump_textures", "true"), "mods dump_textures")
+	testing.expect_value(t, config.mods_dump_textures, true)
+}
+

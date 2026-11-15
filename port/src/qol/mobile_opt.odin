@@ -38,12 +38,18 @@ PERF_PROFILE_KEYS := [Perf_Profile]string {
 	.Battery  = "battery",
 }
 
-// Tracks whether the user explicitly set [window] detail or hardware in
+// Tracks whether the user explicitly set key display/audio options in
 // bof4.ini so Android safe defaults never override a deliberate user preference.
 @(private)
 config_detail_explicit: bool
 @(private)
 config_hardware_explicit: bool
+@(private)
+config_filter_explicit: bool
+@(private)
+config_smooth_tex_explicit: bool
+@(private)
+config_audio_latency_explicit: bool
 
 // Apply pre-init thread/pacing tuning (called from qol.boot() before
 // host.platform_init starts the raster thread pool).
@@ -52,18 +58,30 @@ mobile_opt_boot :: proc() {
 	if core.headless {
 		return
 	}
-	// On Android, default to the fast NEON-accelerated software renderer at
-	// Detail x1 unless the user explicitly enabled Vulkan hardware rendering
-	// in bof4.ini. Many mobile Vulkan 1.3 drivers reject desktop-class SPIR-V
-	// features or large contiguous staging buffers and abort via vk_check.
+	// On Android:
+	//   - Default to OpenGL ES software presentation unless user picked Vulkan
+	//     in the in-game MENU or bof4.ini.
+	//   - Default to Detail x2 + Linear filter + Soft Texels + Anti-Wobble PGXP
+	//     to completely eliminate PS1 3D polygon wobble and pixel shimmer!
+	//   - Default audio buffer to 140 ms (smooth, glitch-free playback on
+	//     variable-frequency mobile big.LITTLE cores).
 	when ODIN_PLATFORM_SUBTARGET == .Android {
 		if !config_hardware_explicit {
 			config.window_hardware = false
 		}
-		if !config_detail_explicit && !config.window_hardware {
-			config.window.detail = .X1
+		if !config_detail_explicit {
+			config.window.detail = .X2
 			config.window_bloom_effects = false
 			config.window_depth_of_field = false
+		}
+		if !config_filter_explicit {
+			config.window.filter = .Linear
+		}
+		if !config_smooth_tex_explicit {
+			config.window_smooth_textures = true
+		}
+		if !config_audio_latency_explicit {
+			config.audio_latency_ms = 140
 		}
 	}
 	// Optional BOF4_RASTER_THREADS environment override.
@@ -89,24 +107,6 @@ mobile_opt_init :: proc() {
 		host.low_memory_hook = interiors_trim_cache
 	}
 	mobile_opt_apply_flags()
-
-	// On Android, if Vulkan 1.3 hardware rendering was unavailable and the
-	// renderer fell back to the CPU software rasterizer, automatically step
-	// down from Detail x2 to crisp full-speed Detail x1 unless the user
-	// explicitly set detail in bof4.ini.
-	when ODIN_PLATFORM_SUBTARGET == .Android {
-		if config.perf_profile == .Auto && !render.gpu_frames() && !config_detail_explicit {
-			if config.window.detail != .X1 {
-				config.window.detail = .X1
-				config.window_bloom_effects = false
-				config.window_depth_of_field = false
-				apply_effects()
-				host.window_apply(config.window)
-				fmt.eprintln("perf: Android software fallback active; auto-selected Detail x1 for full speed")
-				host.osd_toast("Software GPU: Detail x1")
-			}
-		}
-	}
 	if config.perf_profile != .Auto {
 		mobile_opt_apply_profile()
 	}

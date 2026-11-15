@@ -124,3 +124,26 @@ widescreen pillarbox margins and avoiding display notches/cutouts via
 - **Bounded interior cache & `APP_LOWMEMORY` trimming (`[perf] max_cached_rooms`)**:
   Defaults to 4 cached room worlds on Android (saving ~14 MB RAM) and frees
   non-active room worlds immediately when Android signals low memory.
+
+## In-Game Quick Settings Menu & Modding
+
+Tap the floating **`MENU`** button in the top bar (or press **`L3 + R3`** on a
+gamepad / Android **Back** button / **`F1`** on desktop) at any time to open the
+in-game overlay menu without leaving the game:
+
+- **VIDEO**: Change **Resolution** (`1x` / `2x` / `4x`), **FPS Limit** (`30` /
+  `60` / `90` / `120` / `Unlimited`), **Graphics API** (`OpenGL ES` / `Vulkan`),
+  **Anti-Wobble (PGXP)**, **Screen Filter** (`Linear` / `Nearest`), **Soft
+  Texels**, **Scaling**, and **60 FPS Motion**.
+- **AUDIO**: Toggle **Audio Smooth Fix** (click-free adaptive rate tracking +
+  fade-out/fade-in underrun smoothing), tune **Audio Latency** (`40–320 ms`,
+  Android default `140 ms`), and adjust **Master Volume**.
+- **CONTROLS**: Adjust touch mode/layout/opacity/scale, vibration, and stick
+  deadzone live.
+- **MODS**: Enable/disable mods and custom PNG texture packs live, toggle
+  **Dump Textures**, reload mods on the fly, toggle individual installed mods,
+  or import `.zip` mod archives from the launcher (**Import Mod (.zip)**).
+
+See **[`docs/modding.md`](modding.md)** for the complete modding & HD texture
+pack creation manual.
+

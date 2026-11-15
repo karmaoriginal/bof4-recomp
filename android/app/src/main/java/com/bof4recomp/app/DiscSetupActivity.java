@@ -37,6 +37,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 /**
  * Lightweight launcher, validated disc importer, and crash-diagnostic screen.
@@ -51,11 +53,13 @@ import java.util.concurrent.Executors;
 public class DiscSetupActivity extends Activity {
     private static final String TAG = "DiscSetupActivity";
     private static final int REQ_PICK_DISC = 1001;
+    private static final int REQ_PICK_MOD = 1002;
 
     public static final String EXTRA_SHOW_ERROR = "bof4_show_error";
     public static final String LAST_ERROR_FILE = "bof4_last_error.txt";
     public static final String BOOT_LOG_FILE = "bof4_boot.log";
     public static final String LAUNCH_FLAG_FILE = "bof4_launching.flag";
+    public static final String OPEN_SETUP_FLAG = "bof4_open_setup.flag";
 
     private File dataDir;
     private TextView filesText;
@@ -63,6 +67,7 @@ public class DiscSetupActivity extends Activity {
     private TextView errorBox;
     private ProgressBar progressBar;
     private Button pickButton;
+    private Button modButton;
     private Button launchButton;
     private Button clearButton;
     private Button copyLogButton;
@@ -85,10 +90,15 @@ public class DiscSetupActivity extends Activity {
         boolean showError = getIntent().getBooleanExtra(EXTRA_SHOW_ERROR, false);
         File errFile = new File(dataDir, LAST_ERROR_FILE);
         File flagFile = new File(dataDir, LAUNCH_FLAG_FILE);
+        File setupFlag = new File(dataDir, OPEN_SETUP_FLAG);
+        boolean openSetupRequested = setupFlag.isFile();
+        if (openSetupRequested) {
+            deleteQuietly(setupFlag);
+        }
         boolean hadCrashOrError = showError || errFile.isFile() || flagFile.isFile();
 
         DiscStatus st = validateDisc(dataDir);
-        if (st.ready && !hadCrashOrError) {
+        if (st.ready && !hadCrashOrError && !openSetupRequested) {
             launchGame();
             return;
         }
@@ -149,6 +159,9 @@ public class DiscSetupActivity extends Activity {
         pickButton = makeButton(R.string.setup_pick_button, "#3B6AD8", Color.WHITE);
         pickButton.setOnClickListener(v -> openFilePicker());
 
+        modButton = makeButton(R.string.setup_mod_button, "#6B46C1", Color.WHITE);
+        modButton.setOnClickListener(v -> openModPicker());
+
         launchButton = makeButton(R.string.setup_launch_button, "#25855A", Color.WHITE);
         launchButton.setOnClickListener(v -> {
             DiscStatus st = validateDisc(dataDir);
@@ -177,6 +190,7 @@ public class DiscSetupActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         btnLp.rightMargin = dp(8);
         buttons.addView(pickButton, btnLp);
+        buttons.addView(modButton, btnLp);
         buttons.addView(launchButton, btnLp);
         buttons.addView(clearButton, btnLp);
         buttons.addView(copyLogButton);
@@ -287,10 +301,21 @@ public class DiscSetupActivity extends Activity {
         startActivityForResult(intent, REQ_PICK_DISC);
     }
 
+    private void openModPicker() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        startActivityForResult(intent, REQ_PICK_MOD);
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQ_PICK_DISC || resultCode != RESULT_OK || data == null) {
+        if (resultCode != RESULT_OK || data == null) {
+            return;
+        }
+        if (requestCode != REQ_PICK_DISC && requestCode != REQ_PICK_MOD) {
             return;
         }
         List<Uri> uris = new ArrayList<>();
@@ -306,12 +331,150 @@ public class DiscSetupActivity extends Activity {
             uris.add(data.getData());
         }
         if (!uris.isEmpty()) {
-            importUris(uris);
+            if (requestCode == REQ_PICK_MOD) {
+                importModZips(uris);
+            } else {
+                importUris(uris);
+            }
         }
+    }
+
+    private void importModZips(List<Uri> uris) {
+        pickButton.setEnabled(false);
+        modButton.setEnabled(false);
+        launchButton.setEnabled(false);
+        clearButton.setEnabled(false);
+        progressBar.setVisibility(View.VISIBLE);
+
+        ioPool.execute(() -> {
+            File modsRoot = new File(dataDir, "mods");
+            if (!modsRoot.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                modsRoot.mkdirs();
+            }
+            int importedCount = 0;
+            String errMsg = null;
+            byte[] buf = new byte[64 * 1024];
+
+            for (Uri uri : uris) {
+                String name = queryDisplayName(uri);
+                if (name == null || name.isEmpty()) {
+                    continue;
+                }
+                name = new File(name).getName();
+                if (!name.toLowerCase(Locale.US).endsWith(".zip")) {
+                    errMsg = "Mod importer expects .zip archives (got: " + name + ")";
+                    continue;
+                }
+                String baseName = name.substring(0, name.length() - 4).replaceAll("[^a-zA-Z0-9._-]", "_");
+                if (baseName.isEmpty()) {
+                    baseName = "mod_" + System.currentTimeMillis();
+                }
+                final String finalName = name;
+                runOnUiThread(() -> statusText.setText("Installing mod " + finalName + "..."));
+
+                // First inspect whether archive has a single top-level folder containing mod.ini/code.txt/textures
+                boolean hasTopFolder = false;
+                try (InputStream probeIn = getContentResolver().openInputStream(uri);
+                     ZipInputStream zprobe = probeIn != null ? new ZipInputStream(probeIn) : null) {
+                    if (zprobe != null) {
+                        String firstRoot = null;
+                        boolean singleRoot = true;
+                        ZipEntry ze;
+                        while ((ze = zprobe.getNextEntry()) != null) {
+                            String en = ze.getName().replace('\\', '/');
+                            while (en.startsWith("/")) en = en.substring(1);
+                            if (en.isEmpty() || en.startsWith("__MACOSX/")) continue;
+                            int slash = en.indexOf('/');
+                            if (slash <= 0) {
+                                singleRoot = false;
+                                break;
+                            }
+                            String r = en.substring(0, slash);
+                            if (firstRoot == null) {
+                                firstRoot = r;
+                            } else if (!firstRoot.equals(r)) {
+                                singleRoot = false;
+                                break;
+                            }
+                        }
+                        hasTopFolder = singleRoot && firstRoot != null;
+                    }
+                } catch (Exception ignored) {
+                }
+
+                File destRoot = hasTopFolder ? modsRoot : new File(modsRoot, baseName);
+                try {
+                    String canonRoot = destRoot.getCanonicalPath() + File.separator;
+                    try (InputStream in = getContentResolver().openInputStream(uri);
+                         ZipInputStream zin = in != null ? new ZipInputStream(in) : null) {
+                        if (zin == null) {
+                            continue;
+                        }
+                        ZipEntry ze;
+                        while ((ze = zin.getNextEntry()) != null) {
+                            String en = ze.getName().replace('\\', '/');
+                            while (en.startsWith("/")) en = en.substring(1);
+                            if (en.isEmpty() || en.startsWith("__MACOSX/")) {
+                                continue;
+                            }
+                            File outFile = new File(destRoot, en);
+                            String canonOut = outFile.getCanonicalPath();
+                            // Zip-Slip path traversal protection
+                            if (!canonOut.startsWith(canonRoot)) {
+                                throw new SecurityException("Unsafe zip path: " + en);
+                            }
+                            if (ze.isDirectory()) {
+                                //noinspection ResultOfMethodCallIgnored
+                                outFile.mkdirs();
+                            } else {
+                                File parent = outFile.getParentFile();
+                                if (parent != null && !parent.exists()) {
+                                    //noinspection ResultOfMethodCallIgnored
+                                    parent.mkdirs();
+                                }
+                                try (FileOutputStream fos = new FileOutputStream(outFile)) {
+                                    int n;
+                                    while ((n = zin.read(buf)) > 0) {
+                                        fos.write(buf, 0, n);
+                                    }
+                                }
+                            }
+                            zin.closeEntry();
+                        }
+                        importedCount++;
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed importing mod " + finalName, e);
+                    errMsg = "Error installing " + finalName + ": " + e.getMessage();
+                }
+            }
+
+            final int count = importedCount;
+            final String finalErr = errMsg;
+            runOnUiThread(() -> {
+                progressBar.setVisibility(View.GONE);
+                pickButton.setEnabled(true);
+                modButton.setEnabled(true);
+                clearButton.setEnabled(true);
+                DiscStatus st = validateDisc(dataDir);
+                filesText.setText(formatFileList(dataDir));
+                launchButton.setEnabled(st.ready);
+                launchButton.setAlpha(st.ready ? 1.0f : 0.45f);
+                if (finalErr != null) {
+                    statusText.setTextColor(Color.parseColor("#FC8181"));
+                    statusText.setText(finalErr);
+                } else if (count > 0) {
+                    statusText.setTextColor(Color.parseColor("#68D391"));
+                    statusText.setText("Installed " + count + " mod archive(s) into mods/!");
+                }
+            });
+        });
     }
 
     private void importUris(List<Uri> uris) {
         pickButton.setEnabled(false);
+        modButton.setEnabled(false);
         launchButton.setEnabled(false);
         clearButton.setEnabled(false);
         progressBar.setVisibility(View.VISIBLE);
@@ -354,6 +517,7 @@ public class DiscSetupActivity extends Activity {
             runOnUiThread(() -> {
                 progressBar.setVisibility(View.GONE);
                 pickButton.setEnabled(true);
+                modButton.setEnabled(true);
                 clearButton.setEnabled(true);
                 errorBox.setVisibility(View.GONE);
                 copyLogButton.setVisibility(View.GONE);
@@ -565,7 +729,25 @@ public class DiscSetupActivity extends Activity {
             count++;
         }
         if (count == 0) {
-            return "Files in storage: (none)";
+            sb.append("  (no disc files)\n");
+        }
+        File modsDir = new File(dir, "mods");
+        File[] modFolders = modsDir.isDirectory() ? modsDir.listFiles() : null;
+        if (modFolders != null && modFolders.length > 0) {
+            Arrays.sort(modFolders, Comparator.comparing(File::getName, String.CASE_INSENSITIVE_ORDER));
+            List<String> modNames = new ArrayList<>();
+            for (File mf : modFolders) {
+                if (mf.isDirectory() && !mf.getName().startsWith(".") && !mf.getName().startsWith("_")
+                        && !mf.getName().equalsIgnoreCase("dumped_textures")) {
+                    modNames.add(mf.getName());
+                }
+            }
+            if (!modNames.isEmpty()) {
+                sb.append("\nInstalled mods (" + modNames.size() + "):\n");
+                for (String mn : modNames) {
+                    sb.append("  • mods/").append(mn).append("/\n");
+                }
+            }
         }
         return sb.toString().trim();
     }

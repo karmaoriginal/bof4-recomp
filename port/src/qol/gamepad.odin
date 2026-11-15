@@ -257,6 +257,9 @@ input_event_watch :: proc "c" (userdata: rawptr, ev: ^sdl.Event) -> c.int {
 	context = runtime.default_context()
 	#partial switch ev.type {
 	case .FINGERDOWN, .FINGERMOTION, .FINGERUP:
+		if quick_menu_handle_finger(ev.tfinger) {
+			return 1
+		}
 		sync.mutex_lock(&gamepad_state.lock)
 		gamepad_state.gamepad_active = false
 		touch_handle_finger_locked(ev.tfinger)
@@ -265,17 +268,27 @@ input_event_watch :: proc "c" (userdata: rawptr, ev: ^sdl.Event) -> c.int {
 			core.device_used(.PlayStation)
 		}
 
+	case .MOUSEBUTTONDOWN, .MOUSEBUTTONUP:
+		if quick_menu_handle_mouse(ev.button) {
+			return 1
+		}
+
 	case .CONTROLLERDEVICEADDED:
 		sync.mutex_lock(&gamepad_state.lock)
 		gamepad_state.gamepad_active = true
 		sync.mutex_unlock(&gamepad_state.lock)
 
-	case .CONTROLLERBUTTONDOWN:
-		bit := sdl_gc_button_to_pad_bit(sdl.GameControllerButton(ev.cbutton.button))
-		sync.mutex_lock(&gamepad_state.lock)
-		gamepad_state.gamepad_active = true
-		gamepad_state.watch_pad_press |= bit
-		sync.mutex_unlock(&gamepad_state.lock)
+	case .CONTROLLERBUTTONDOWN, .CONTROLLERBUTTONUP:
+		if quick_menu_handle_controller(ev.cbutton) {
+			return 1
+		}
+		if ev.type == .CONTROLLERBUTTONDOWN {
+			bit := sdl_gc_button_to_pad_bit(sdl.GameControllerButton(ev.cbutton.button))
+			sync.mutex_lock(&gamepad_state.lock)
+			gamepad_state.gamepad_active = true
+			gamepad_state.watch_pad_press |= bit
+			sync.mutex_unlock(&gamepad_state.lock)
+		}
 
 	case .CONTROLLERAXISMOTION:
 		if abs(i32(ev.caxis.value)) >= 12000 {
@@ -318,12 +331,8 @@ input_event_watch :: proc "c" (userdata: rawptr, ev: ^sdl.Event) -> c.int {
 		}
 
 	case .KEYDOWN:
-		// Android hardware Back button (SDL_SCANCODE_AC_BACK) toggles pause
-		// cleanly instead of leaving the app or getting swallowed.
-		when ODIN_PLATFORM_SUBTARGET == .Android {
-			if ev.key.keysym.scancode == .AC_BACK && ev.key.repeat == 0 {
-				touch_toggle_pause()
-			}
+		if quick_menu_handle_key(ev.key) {
+			return 1
 		}
 
 	case .APP_WILLENTERBACKGROUND, .APP_DIDENTERBACKGROUND:
@@ -717,7 +726,7 @@ stick_to_dpad_bits :: proc(v: [2]f32) -> u16 {
 // generic fallback joysticks, and virtual touch Left & Right analog sticks.
 @(private)
 input_sticks :: proc() -> (s: host.Sticks) {
-	if io.preload_child {
+	if io.preload_child || quick_menu_is_open() {
 		return
 	}
 	// Preserve 100% stock behavior in headless regression tests.
@@ -795,6 +804,9 @@ input_sticks :: proc() -> (s: host.Sticks) {
 // 2-poll quick-tap latch, and optional Cross/Circle swap.
 @(private = "file")
 input_pad_hook :: proc(held: u16) -> u16 {
+	if quick_menu_is_open() {
+		return 0
+	}
 	out := held
 	if !core.headless && !io.preload_child {
 		input_pump_live()

@@ -4,6 +4,7 @@
     <string name="setup_heading">Breath of Fire IV — Disc Setup</string>
     <string name="setup_body">Select your legal US Breath of Fire IV (SLUS-01324) PlayStation disc image (.cue + all .bin tracks, or a single .bin / .iso).\n\nYou can select all files at once or add them one by one. Files are stored in:\n%1$s</string>
     <string name="setup_pick_button">Add Disc Files</string>
+    <string name="setup_mod_button">Import Mod (.zip)</string>
     <string name="setup_launch_button">Launch Game</string>
     <string name="setup_clear_button">Clear Files</string>
     <string name="setup_copy_log_button">Copy Error Log</string>

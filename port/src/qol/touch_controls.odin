@@ -715,7 +715,11 @@ touch_vblank :: proc() {
 
 @(private)
 touch_render_sdl :: proc(r: ^sdl.Renderer) {
-	if r == nil || !touch_is_visible() {
+	if r == nil {
+		return
+	}
+	if !touch_is_visible() {
+		quick_menu_render_sdl(r)
 		return
 	}
 	// Save host logical canvas state (640x480 4:3) and switch to full physical
@@ -727,6 +731,7 @@ touch_render_sdl :: proc(r: ^sdl.Renderer) {
 	sdl.RenderSetViewport(r, nil)
 	sdl.RenderSetScale(r, 1, 1)
 	defer {
+		quick_menu_render_sdl(r)
 		if lw > 0 && lh > 0 {
 			sdl.RenderSetLogicalSize(r, lw, lh)
 			sdl.RenderSetIntegerScale(r, int_scale)

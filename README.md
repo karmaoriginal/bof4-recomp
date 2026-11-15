@@ -97,6 +97,11 @@ controller, and optimization instructions.
 
 ## Modding
 
+See **[docs/modding.md](docs/modding.md)** for the full user & developer manual
+on creating code mods (MIPS/RAM/overlay patches, GameShark codes, disc file
+overrides, and native overrides) and custom 1x/HD PNG texture packs (including
+live texture dumping and Android `.zip` mod import).
+
 [docs/architecture.md](docs/architecture.md) explains how the port runs the
 game and how to hook a game function. The other guides record what is known
 about the game's field engine, maps and story flags, battle, text, and
