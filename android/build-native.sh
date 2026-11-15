@@ -27,6 +27,7 @@ ABIS="arm64-v8a"
 OPT="${BOF4_OPT:-speed}"
 DEBUG_FLAGS=""
 FAST_RELEASE=0
+STANDALONE=0
 API_LEVEL="${BOF4_ANDROID_API:-29}"
 
 while [[ $# -gt 0 ]]; do
@@ -34,9 +35,10 @@ while [[ $# -gt 0 ]]; do
         --abi)          ABIS="$2"; shift 2 ;;
         --debug)        DEBUG_FLAGS="-debug"; OPT="minimal"; shift ;;
         --fast-release) FAST_RELEASE=1; shift ;;
+        --standalone)   STANDALONE=1; shift ;;
         --api)          API_LEVEL="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: $0 [--abi arm64-v8a[,x86_64]] [--debug] [--fast-release] [--api 29]"
+            echo "Usage: $0 [--abi arm64-v8a[,x86_64]] [--debug] [--fast-release] [--standalone] [--api 29]"
             exit 0
             ;;
         *)
@@ -66,12 +68,37 @@ if ! command -v cmake >/dev/null 2>&1; then
     exit 1
 fi
 if [[ ! -d "$PORT_DIR/src/rec" ]]; then
-    echo "error: port/src/rec not found. Run ./setup.sh from the repo root with your US Breath of Fire IV disc image first." >&2
-    exit 1
+    if [[ "$STANDALONE" == "1" ]]; then
+        echo "==> Building standalone APK (no port/src/rec; uses built-in R3000A interpreter or user-provided bof4.native)"
+    else
+        echo "==> port/src/rec not found; enabling standalone APK mode (pass your disc to ./setup.sh to embed statically recompiled code)"
+        STANDALONE=1
+    fi
 fi
 if [[ ! -f "$SDL2_DIR/CMakeLists.txt" ]]; then
     echo "error: SDL2 source not found at $SDL2_DIR. Run ./android/build.sh (which downloads SDL2) or set SDL2_DIR." >&2
     exit 1
+fi
+
+# 0. Prepare Odin source dir (use staged copy with stub rec package in standalone mode)
+BUILD_SRC="$PORT_DIR/src"
+if [[ "$STANDALONE" == "1" && ! -d "$PORT_DIR/src/rec" ]]; then
+    STAGE_SRC="$SCRIPT_DIR/build/src-standalone"
+    rm -rf "$STAGE_SRC"
+    mkdir -p "$STAGE_SRC/rec"
+    cp -a "$PORT_DIR/src/." "$STAGE_SRC/"
+    cat > "$STAGE_SRC/rec/rec.odin" <<'EOF'
+// Standalone stub: no copyrighted game code is compiled into this binary.
+// ps-recomp runs the user's disc image via its built-in R3000A interpreter,
+// or loads a user-generated bof4_arm64.native / bof4.native blob if present.
+package rec
+
+import cpu "ps:psx/cpu"
+
+EXE_FUNCS: [0]cpu.Func_Entry
+register_overlays :: proc() {}
+EOF
+    BUILD_SRC="$STAGE_SRC"
 fi
 
 # 1. Stage patched ps-recomp cleanly without touching the submodule
@@ -144,7 +171,7 @@ for ABI in "${ABI_LIST[@]}"; do
     echo "==> Compiling libbof4.so for $ABI ($ODIN_TARGET, -o:$OPT)"
     (
         cd "$PORT_DIR"
-        odin build src \
+        odin build "$BUILD_SRC" \
             -out:"$ABI_OUT/libbof4.so" \
             -target:"$ODIN_TARGET" \
             -subtarget:android \

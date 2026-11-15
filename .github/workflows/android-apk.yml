@@ -1,0 +1,193 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - 'arena/**'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build configuration'
+        required: false
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - fast-release
+          - debug
+      abis:
+        description: 'Target Android ABIs (comma-separated)'
+        required: false
+        default: 'arm64-v8a'
+        type: string
+      release_tag:
+        description: 'GitHub Release tag (defaults to android-latest)'
+        required: false
+        default: 'android-latest'
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ODIN_VERSION: dev-2026-11a
+  SDL2_VERSION: 2.30.11
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository (with ps-recomp submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install host build tools (Ninja, SDL2 dev for unit tests)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build libsdl2-dev
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Cache Odin ${{ env.ODIN_VERSION }}
+        id: cache-odin
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/odin-${{ env.ODIN_VERSION }}
+          key: odin-linux-amd64-${{ env.ODIN_VERSION }}
+
+      - name: Install Odin ${{ env.ODIN_VERSION }}
+        run: |
+          ODIN_DIR="$HOME/.local/odin-${{ env.ODIN_VERSION }}"
+          if [[ ! -x "$ODIN_DIR/odin" ]]; then
+            mkdir -p "$ODIN_DIR"
+            curl -fL "https://github.com/odin-lang/Odin/releases/download/${{ env.ODIN_VERSION }}/odin-linux-amd64-${{ env.ODIN_VERSION }}.tar.gz" -o /tmp/odin.tar.gz
+            tar -xzf /tmp/odin.tar.gz -C "$ODIN_DIR" --strip-components=1
+            rm -f /tmp/odin.tar.gz
+          fi
+          ODIN_BIN_DIR="$(dirname "$(find "$ODIN_DIR" -maxdepth 2 -name odin -type f -executable | head -n 1)")"
+          echo "$ODIN_BIN_DIR" >> "$GITHUB_PATH"
+          "$ODIN_BIN_DIR/odin" version
+
+      - name: Cache SDL2 ${{ env.SDL2_VERSION }} source
+        uses: actions/cache@v4
+        with:
+          path: android/sdl2
+          key: sdl2-src-${{ env.SDL2_VERSION }}
+
+      - name: Configure Android SDK & NDK
+        run: |
+          NDK_PATH="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}}"
+          if [[ -z "$NDK_PATH" && -d "${ANDROID_HOME}/ndk" ]]; then
+            NDK_PATH="$(ls -d "${ANDROID_HOME}/ndk/"* | sort -V | tail -n 1)"
+          fi
+          echo "Using ANDROID_HOME=${ANDROID_HOME}"
+          echo "Using ANDROID_NDK_HOME=${NDK_PATH}"
+          echo "ANDROID_NDK_HOME=${NDK_PATH}" >> "$GITHUB_ENV"
+          echo "ODIN_ANDROID_NDK=${NDK_PATH}" >> "$GITHUB_ENV"
+          echo "ODIN_ANDROID_SDK=${ANDROID_HOME}" >> "$GITHUB_ENV"
+          if [[ -x "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" ]]; then
+            yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          fi
+
+      - name: Run Odin control & geometry unit tests (patched ps-recomp)
+        run: |
+          rm -rf /tmp/ps-test
+          cp -a ps-recomp /tmp/ps-test
+          rm -rf /tmp/ps-test/.git
+          patch -d /tmp/ps-test -p1 -s < patches/ps-recomp-android.patch
+          odin test port/src/qol \
+            -collection:ps=/tmp/ps-test \
+            -define:ENV_PREFIX=BOF4_ \
+            -define:PS_ANDROID_PATCH=true
+
+      - name: Build Android APK
+        id: build_apk
+        run: |
+          BUILD_TYPE="${{ inputs.build_type || 'release' }}"
+          ABIS="${{ inputs.abis || 'arm64-v8a' }}"
+          case "$BUILD_TYPE" in
+            release)      FLAG="--release";      OUT_NAME="bof4-android-release.apk" ;;
+            fast-release) FLAG="--fast-release"; OUT_NAME="bof4-android-release.apk" ;;
+            debug)        FLAG="--debug";        OUT_NAME="bof4-android-debug.apk" ;;
+            *)            echo "Invalid build_type: $BUILD_TYPE" >&2; exit 1 ;;
+          esac
+
+          chmod +x android/build.sh android/build-native.sh
+          ./android/build.sh "$FLAG" --abi "$ABIS" --standalone
+
+          APK_PATH="android/${OUT_NAME}"
+          test -f "$APK_PATH"
+          ls -lh "$APK_PATH"
+          sha256sum "$APK_PATH" > "${APK_PATH}.sha256"
+          cat "${APK_PATH}.sha256"
+
+          echo "apk_path=${APK_PATH}" >> "$GITHUB_OUTPUT"
+          echo "sha_path=${APK_PATH}.sha256" >> "$GITHUB_OUTPUT"
+          echo "apk_name=${OUT_NAME}" >> "$GITHUB_OUTPUT"
+          echo "abis=${ABIS}" >> "$GITHUB_OUTPUT"
+          echo "build_type=${BUILD_TYPE}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bof4-android-apk
+          path: |
+            ${{ steps.build_apk.outputs.apk_path }}
+            ${{ steps.build_apk.outputs.sha_path }}
+          if-no-files-found: error
+
+      - name: Publish APK to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            TITLE="Breath of Fire IV Android (${TAG})"
+          else
+            TAG="${{ inputs.release_tag || 'android-latest' }}"
+            TITLE="Breath of Fire IV Android (Latest Build)"
+          fi
+
+          APK_PATH="${{ steps.build_apk.outputs.apk_path }}"
+          SHA_PATH="${{ steps.build_apk.outputs.sha_path }}"
+          SHORT_SHA="${GITHUB_SHA::7}"
+
+          NOTES=$(cat <<EOF
+          Automated Android APK build from commit \`${SHORT_SHA}\` (\`${GITHUB_REF_NAME}\`).
+
+          - **ABIs:** \`${{ steps.build_apk.outputs.abis }}\`
+          - **Configuration:** \`${{ steps.build_apk.outputs.build_type }}\` (Android 10+ / API 29+)
+          - **Includes:** On-screen PlayStation DualShock/Digital/Analog touch controls, low-latency Bluetooth/USB gamepad support, Vulkan + software auto-scaling, and mobile optimizations.
+          - **Legal notice:** Contains no copyrighted game code or disc data. On first launch, select your own US Breath of Fire IV (\`SLUS-01324\`) \`.cue\`/\`.bin\` disc image in the import screen. Optionally place a user-generated \`bof4_arm64.native\` blob next to the disc for native AOT speed.
+          EOF
+          )
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK_PATH" "$SHA_PATH" --clobber
+            gh release edit "$TAG" --target "${GITHUB_SHA}" --title "$TITLE" --notes "$NOTES"
+          else
+            gh release create "$TAG" "$APK_PATH" "$SHA_PATH" \
+              --target "${GITHUB_SHA}" \
+              --title "$TITLE" \
+              --notes "$NOTES" \
+              --prerelease
+          fi

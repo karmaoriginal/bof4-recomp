@@ -24,9 +24,10 @@ while [[ $# -gt 0 ]]; do
         --debug)        BUILD_TYPE="Debug"; NATIVE_ARGS+=(--debug); shift ;;
         --release)      BUILD_TYPE="Release"; shift ;;
         --fast-release) BUILD_TYPE="Release"; NATIVE_ARGS+=(--fast-release); shift ;;
+        --standalone)   NATIVE_ARGS+=(--standalone); shift ;;
         --install)      DO_INSTALL=1; shift ;;
         -h|--help)
-            echo "Usage: $0 [--abi arm64-v8a[,x86_64]] [--debug|--release|--fast-release] [--install]"
+            echo "Usage: $0 [--abi arm64-v8a[,x86_64]] [--debug|--release|--fast-release] [--standalone] [--install]"
             exit 0
             ;;
         *)

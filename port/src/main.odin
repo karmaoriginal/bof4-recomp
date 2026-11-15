@@ -29,6 +29,20 @@ run_bof4 :: proc(disc_dir, cue: string) -> bool {
 		fmt.eprintln("cannot find disc image:", cue)
 		return false
 	}
+	native_path := core.env("NATIVE_FILE")
+	if native_path == "" {
+		when ODIN_ARCH == .arm64 {
+			if os.exists("bof4_arm64.native") {
+				native_path = "bof4_arm64.native"
+			} else if os.exists("bof4.native") {
+				native_path = "bof4.native"
+			}
+		} else {
+			if os.exists("bof4.native") {
+				native_path = "bof4.native"
+			}
+		}
+	}
 	ok := psx.run(
 		{
 			exe = exe,
@@ -39,7 +53,7 @@ run_bof4 :: proc(disc_dir, cue: string) -> bool {
 			// Machine code built from the same recompile (its native_arch and
 			// native_out options) in place of the Odin functions; on failure
 			// the Odin ones stay.
-			native = core.env("NATIVE_FILE"),
+			native = native_path,
 			cards = {"bof4_slot1.mcd", "bof4_slot2.mcd"},
 			setup = qol.boot,
 			hooks = qol.init,

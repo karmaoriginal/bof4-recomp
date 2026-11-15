@@ -199,6 +199,7 @@ import "core:strconv"
 import "core:strings"
 
 import bios "ps:psx/bios"
+import cpu "ps:psx/cpu"
 import host "ps:psx/host"
 import render "ps:psx/render"
 
@@ -399,6 +400,9 @@ boot :: proc() -> bool {
 	return true
 }
 
+@(private = "file")
+qol_recomp_hooks: bool
+
 // Install every feature hook (after boot and host.platform_init).
 init :: proc() -> bool {
 	masters_init()
@@ -413,9 +417,20 @@ init :: proc() -> bool {
 	core.audio_apply(config.audio_latency_ms)
 	bios.pad_set_rumble(1)
 	host.mouse_drag = config.camera_mouse
-	ok := host.window_apply(config.window) && encounter_init() && text_init() && camera_init() && movement_init() && save_init() && tracker_init() && popup_init() && learning_init() && combo_menu_init() && guard_init() && rewards_init() && damage_init() && ai_init() && ko_loss_init() && status_init() && victory_init() && quick_battle_init() && shake_init() && warp_init() && menu_draw_init() && button_text_init() && identify_init() && balance_init() && camp_menu_init() && setting_menu_init() && map_geometry_init() && collision_init() && sections_init() && fade_init() && inbetween_init() && interiors_init() && map_mods_init() && map_editor_init() && mouse_menus_init() && dengeki_init() && restored_init() && teacher_init() && descriptions_init() && npc_swap_init() && cinematics_init() && autoplay_init()
-	if !ok {
+	if !host.window_apply(config.window) {
 		return false
+	}
+	// Standalone APK / interpreter mode has no statically recompiled functions
+	// unless a bof4.native blob was loaded: run host input/touch/graphics hooks
+	// cleanly instead of failing on cpu.hook_overlay.
+	qol_recomp_hooks = len(cpu.dispatch.overlay) > 0
+	if qol_recomp_hooks {
+		ok := encounter_init() && text_init() && camera_init() && movement_init() && save_init() && tracker_init() && popup_init() && learning_init() && combo_menu_init() && guard_init() && rewards_init() && damage_init() && ai_init() && ko_loss_init() && status_init() && victory_init() && quick_battle_init() && shake_init() && warp_init() && menu_draw_init() && button_text_init() && identify_init() && balance_init() && camp_menu_init() && setting_menu_init() && map_geometry_init() && collision_init() && sections_init() && fade_init() && inbetween_init() && interiors_init() && map_mods_init() && map_editor_init() && mouse_menus_init() && dengeki_init() && restored_init() && teacher_init() && descriptions_init() && npc_swap_init() && cinematics_init() && autoplay_init()
+		if !ok {
+			return false
+		}
+	} else {
+		fmt.eprintln("qol: standalone interpreter mode (no recompiled overlays; place bof4.native next to disc for full AOT + QoL hooks)")
 	}
 	// Install unified gamepad/touch input and mobile optimizations after
 	// mouse_menus_init so host.pad_hook chaining is guaranteed.
@@ -433,6 +448,9 @@ vblank :: proc() {
 	speed_follow_mode()
 	controls_vblank()
 	button_icons_vblank()
+	if !qol_recomp_hooks {
+		return
+	}
 	tracker_vblank()
 	dengeki_vblank()
 	restored_vblank()

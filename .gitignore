@@ -3,6 +3,7 @@
 # project, saves, builds and debug output stay local.
 /*
 !/.gitignore
+!/.github/
 !/README.md
 !/LICENSE
 !/setup.sh
