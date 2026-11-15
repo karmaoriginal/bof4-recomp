@@ -190,7 +190,7 @@ for ABI in "${ABI_LIST[@]}"; do
     echo "==> Built $ABI_OUT/libbof4.so"
 
     # 5. Verify ELF SONAME / NEEDED / SDL_main export with NDK llvm-readelf / llvm-nm
-    LLVM_READELF="$(find "$NDK/toolchains/llvm/prebuilt" -maxdepth 5 -name llvm-readelf -type f | head -n 1)"
+    LLVM_READELF="$(find "$NDK/toolchains/llvm/prebuilt" -maxdepth 5 -name llvm-readelf \( -type f -o -type l \) | head -n 1)"
     if [[ -n "$LLVM_READELF" && -x "$LLVM_READELF" ]]; then
         LLVM_BIN="$(dirname "$LLVM_READELF")"
         echo "==> ELF dynamic table for $ABI/libSDL2.so:"
