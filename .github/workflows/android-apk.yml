@@ -57,7 +57,7 @@ jobs:
           sudo apt-get install -y -qq ninja-build libsdl2-dev
 
       - name: Setup JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -114,10 +114,23 @@ jobs:
           cp -a ps-recomp /tmp/ps-test
           rm -rf /tmp/ps-test/.git
           patch -d /tmp/ps-test -p1 -s < patches/ps-recomp-android.patch
+          set +e
           odin test port/src/qol \
             -collection:ps=/tmp/ps-test \
             -define:ENV_PREFIX=BOF4_ \
-            -define:PS_ANDROID_PATCH=true
+            -define:PS_ANDROID_PATCH=true > /tmp/test.log 2>&1
+          RC=$?
+          cat /tmp/test.log
+          if [[ $RC -ne 0 ]]; then
+            python3 -c '
+          import pathlib
+          txt = pathlib.Path("/tmp/test.log").read_text(errors="replace")
+          lines = txt.splitlines()[-80:]
+          msg = "\n".join(lines).replace("%","%25").replace("\r","%0D").replace("\n","%0A")
+          print(f"::error title=odin-test-failed::{msg}")
+          '
+            exit $RC
+          fi
 
       - name: Build Android APK
         id: build_apk
@@ -132,7 +145,21 @@ jobs:
           esac
 
           chmod +x android/build.sh android/build-native.sh
-          ./android/build.sh "$FLAG" --abi "$ABIS" --standalone
+          set +e
+          ./android/build.sh "$FLAG" --abi "$ABIS" --standalone > /tmp/build.log 2>&1
+          RC=$?
+          cat /tmp/build.log
+          if [[ $RC -ne 0 ]]; then
+            python3 -c '
+          import pathlib
+          txt = pathlib.Path("/tmp/build.log").read_text(errors="replace")
+          lines = txt.splitlines()[-100:]
+          msg = "\n".join(lines).replace("%","%25").replace("\r","%0D").replace("\n","%0A")
+          print(f"::error title=android-build-failed::{msg}")
+          '
+            exit $RC
+          fi
+          set -e
 
           APK_PATH="android/${OUT_NAME}"
           test -f "$APK_PATH"
