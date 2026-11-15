@@ -71,15 +71,17 @@ file_has_iso9660 :: proc(path: string) -> bool {
 @(private = "file")
 android_find_disc :: proc(dir: string) -> (disc_dir, cue_path: string) {
 	// Optional extracted disc/SLUS_013.24 folder
-	sub_disc := filepath.join({dir, "disc"}, context.temp_allocator)
-	if os.exists(filepath.join({sub_disc, "SLUS_013.24"}, context.temp_allocator)) {
+	sub_disc, _ := filepath.join({dir, "disc"}, context.temp_allocator)
+	sub_exe, _ := filepath.join({sub_disc, "SLUS_013.24"}, context.temp_allocator)
+	dir_exe, _ := filepath.join({dir, "SLUS_013.24"}, context.temp_allocator)
+	if os.exists(sub_exe) {
 		disc_dir = sub_disc
-	} else if os.exists(filepath.join({dir, "SLUS_013.24"}, context.temp_allocator)) {
+	} else if os.exists(dir_exe) {
 		disc_dir = dir
 	}
 
 	// Exact canonical filename first
-	canonical := filepath.join({dir, "Breath of Fire IV.cue"}, context.temp_allocator)
+	canonical, _ := filepath.join({dir, "Breath of Fire IV.cue"}, context.temp_allocator)
 	if os.exists(canonical) {
 		return disc_dir, canonical
 	}

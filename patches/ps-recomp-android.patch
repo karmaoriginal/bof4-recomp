@@ -199,7 +199,7 @@ index f95efbd..644a35f 100644
 +	win_h: i32 = 0 when ODIN_PLATFORM_SUBTARGET == .Android else WINDOW_H * 2
 +	win_flags: sdl.WindowFlags
 +	when ODIN_PLATFORM_SUBTARGET == .Android {
-+		win_flags = {.FULLSCREEN_DESKTOP, .RESIZABLE, .ALLOW_HIGHDPI}
++		win_flags = sdl.WINDOW_FULLSCREEN_DESKTOP | {.RESIZABLE, .ALLOW_HIGHDPI}
 +	} else {
 +		win_flags = core.headless ? {.RESIZABLE, .HIDDEN} : {.RESIZABLE}
 +	}
