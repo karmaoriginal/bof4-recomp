@@ -153,8 +153,10 @@ jobs:
             python3 -c '
           import pathlib
           txt = pathlib.Path("/tmp/build.log").read_text(errors="replace")
-          lines = txt.splitlines()[-100:]
-          msg = "\n".join(lines).replace("%","%25").replace("\r","%0D").replace("\n","%0A")
+          marker = "==> Compiling libbof4.so"
+          if marker in txt:
+              txt = txt[txt.rfind(marker):]
+          msg = txt[-3500:].replace("%","%25").replace("\r","%0D").replace("\n","%0A")
           print(f"::error title=android-build-failed::{msg}")
           '
             exit $RC
