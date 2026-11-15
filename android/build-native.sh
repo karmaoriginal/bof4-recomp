@@ -185,7 +185,7 @@ for ABI in "${ABI_LIST[@]}"; do
             -collection:ps="$STAGE_PS" \
             -define:ENV_PREFIX=BOF4_ \
             -define:PS_ANDROID_PATCH=true \
-            -extra-linker-flags:"-L$ABI_OUT -lSDL2 -landroid -llog -Wl,-rpath,\$ORIGIN -Wl,-z,max-page-size=16384"
+            -extra-linker-flags:"-L$ABI_OUT -lSDL2 -landroid -llog -Wl,-soname,libbof4.so -Wl,-rpath,\$ORIGIN -Wl,-z,max-page-size=16384"
     )
     if [[ ! -s "$ABI_OUT/libbof4.so" ]]; then
         echo "error: odin build exited without producing $ABI_OUT/libbof4.so" >&2
@@ -200,17 +200,18 @@ for ABI in "${ABI_LIST[@]}"; do
         echo "==> ELF dynamic table for $ABI/libSDL2.so:"
         "$LLVM_BIN/llvm-readelf" -d "$ABI_OUT/libSDL2.so" | grep -E "SONAME|NEEDED" || true
         echo "==> ELF dynamic table for $ABI/libbof4.so:"
-        "$LLVM_BIN/llvm-readelf" -d "$ABI_OUT/libbof4.so" | grep -E "SONAME|NEEDED" || true
-        if "$LLVM_BIN/llvm-readelf" -d "$ABI_OUT/libbof4.so" | grep -qE "libSDL2(-2\.0)?\.so\.[0-9]"; then
+        BOF4_DYN="$("$LLVM_BIN/llvm-readelf" -d "$ABI_OUT/libbof4.so" | grep -E "SONAME|NEEDED" || true)"
+        echo "$BOF4_DYN"
+        if echo "$BOF4_DYN" | grep -qE "libSDL2(-2\.0)?\.so\.[0-9]"; then
             echo "error: libbof4.so links against a versioned libSDL2 SONAME (Android requires libSDL2.so)" >&2
             exit 1
         fi
-        if ! "$LLVM_BIN/llvm-nm" -D --defined-only "$ABI_OUT/libbof4.so" | grep -qw "SDL_main"; then
+        SDL_MAIN_SYM="$("$LLVM_BIN/llvm-nm" -D --defined-only "$ABI_OUT/libbof4.so" | grep -w "SDL_main" || true)"
+        if [[ -z "$SDL_MAIN_SYM" ]]; then
             echo "error: libbof4.so does not export SDL_main!" >&2
             "$LLVM_BIN/llvm-nm" -D --defined-only "$ABI_OUT/libbof4.so" | head -n 40 >&2 || true
             exit 1
         fi
-        SDL_MAIN_SYM="$("$LLVM_BIN/llvm-nm" -D --defined-only "$ABI_OUT/libbof4.so" | grep -w "SDL_main")"
         echo "==> Verified: libbof4.so links unversioned libSDL2.so and exports: $SDL_MAIN_SYM"
     else
         echo "warning: llvm-readelf not found under $NDK/toolchains/llvm/prebuilt" >&2
