@@ -66,10 +66,12 @@ run_bof4 :: proc(disc_dir, cue: string) -> bool {
 	return true
 }
 
-main :: proc() {
-	disc_dir := len(os.args) > 1 ? os.args[1] : "../disc"
-	cue := len(os.args) > 2 ? os.args[2] : "../Breath of Fire IV.cue"
-	if !run_bof4(disc_dir, cue) {
-		os.exit(1)
+when ODIN_PLATFORM_SUBTARGET != .Android {
+	main :: proc() {
+		disc_dir := len(os.args) > 1 ? os.args[1] : "../disc"
+		cue := len(os.args) > 2 ? os.args[2] : "../Breath of Fire IV.cue"
+		if !run_bof4(disc_dir, cue) {
+			os.exit(1)
+		}
 	}
 }
