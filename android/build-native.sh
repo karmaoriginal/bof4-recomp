@@ -207,9 +207,11 @@ for ABI in "${ABI_LIST[@]}"; do
         fi
         if ! "$LLVM_BIN/llvm-nm" -D --defined-only "$ABI_OUT/libbof4.so" | grep -qw "SDL_main"; then
             echo "error: libbof4.so does not export SDL_main!" >&2
+            "$LLVM_BIN/llvm-nm" -D --defined-only "$ABI_OUT/libbof4.so" | head -n 40 >&2 || true
             exit 1
         fi
-        echo "==> Verified: libbof4.so links unversioned libSDL2.so and exports SDL_main"
+        SDL_MAIN_SYM="$("$LLVM_BIN/llvm-nm" -D --defined-only "$ABI_OUT/libbof4.so" | grep -w "SDL_main")"
+        echo "==> Verified: libbof4.so links unversioned libSDL2.so and exports: $SDL_MAIN_SYM"
     else
         echo "warning: llvm-readelf not found under $NDK/toolchains/llvm/prebuilt" >&2
     fi

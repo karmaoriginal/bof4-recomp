@@ -139,8 +139,10 @@ write_last_error :: proc(summary: string) {
 }
 
 // Exported C entry point invoked by org.libsdl.app.SDLActivity on Android.
-@(export, link_name = "SDL_main")
-android_sdl_main :: proc "c" (argc: c.int, argv: [^]cstring) -> c.int {
+// Note: name the procedure SDL_main directly without `link_name` — in Odin
+// combining @(export) with a non-__ link_name can demote linkage to internal.
+@(export)
+SDL_main :: proc "c" (argc: c.int, argv: [^]cstring) -> c.int {
 	context = runtime.default_context()
 	defer free_all(context.temp_allocator)
 
