@@ -84,6 +84,21 @@ fi
 APK_OUT="$SCRIPT_DIR/bof4-android-$LOWER_TYPE.apk"
 if [[ -f "$APK_SRC" ]]; then
     cp -f "$APK_SRC" "$APK_OUT"
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$APK_OUT" "$ABIS" <<'PY'
+import sys, zipfile
+apk, abis = sys.argv[1], [a.strip() for a in sys.argv[2].split(",") if a.strip()]
+with zipfile.ZipFile(apk) as zf:
+    names = set(zf.namelist())
+    for abi in abis:
+        for lib in ("libSDL2.so", "libbof4.so"):
+            entry = f"lib/{abi}/{lib}"
+            if entry not in names:
+                raise SystemExit(f"error: {apk} is missing {entry}!")
+            info = zf.getinfo(entry)
+            print(f"==> Verified in APK: {entry} ({info.file_size} bytes)")
+PY
+    fi
     echo "==> APK ready: $APK_OUT"
 fi
 

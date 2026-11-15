@@ -136,7 +136,7 @@ for ABI in "${ABI_LIST[@]}"; do
     case "$ABI" in
         arm64-v8a)
             ODIN_TARGET="linux_arm64"
-            ODIN_ARCH_FLAGS=(-microarch:armv8-a)
+            ODIN_ARCH_FLAGS=(-microarch:generic)
             ;;
         x86_64)
             ODIN_TARGET="linux_amd64"
@@ -187,7 +187,11 @@ for ABI in "${ABI_LIST[@]}"; do
             -define:PS_ANDROID_PATCH=true \
             -extra-linker-flags:"-L$ABI_OUT -lSDL2 -landroid -llog -Wl,-rpath,\$ORIGIN -Wl,-z,max-page-size=16384"
     )
-    echo "==> Built $ABI_OUT/libbof4.so"
+    if [[ ! -s "$ABI_OUT/libbof4.so" ]]; then
+        echo "error: odin build exited without producing $ABI_OUT/libbof4.so" >&2
+        exit 1
+    fi
+    echo "==> Built $ABI_OUT/libbof4.so ($(stat -c%s "$ABI_OUT/libbof4.so") bytes)"
 
     # 5. Verify ELF SONAME / NEEDED / SDL_main export with NDK llvm-readelf / llvm-nm
     LLVM_READELF="$(find "$NDK/toolchains/llvm/prebuilt" -maxdepth 5 -name llvm-readelf \( -type f -o -type l \) | head -n 1)"
