@@ -20,6 +20,7 @@
 package qol
 
 import "core:c"
+import "core:fmt"
 import "core:math"
 import "core:os"
 import "core:strconv"
@@ -700,7 +701,7 @@ touch_vblank :: proc() {
 		next := Touch_Layout_Mode((int(config.touch_layout) + 1) % (int(max(Touch_Layout_Mode)) + 1))
 		config.touch_layout = next
 		touch_apply_config()
-		host.osd_toast("Pad: %s", TOUCH_LAYOUT_TEXT[next])
+		host.osd_toast(fmt.tprintf("Pad: %s", TOUCH_LAYOUT_TEXT[next]))
 	}
 
 	when !PS_ANDROID_PATCH {
@@ -1283,7 +1284,7 @@ touch_update_osd_fallback :: proc() {
 	touch_state.osd_last_ls = ls
 	touch_state.osd_last_rs = rs
 
-	pix := host.osd_overlay_pixels()
+	pix := host.osd_overlay_pixels[:]
 	for &p in pix {
 		p = 0
 	}

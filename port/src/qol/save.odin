@@ -59,7 +59,14 @@ STATE_PLAYER_CONTROL :: 1
 AUTOSAVE_SETTLE :: 30
 
 @(private = "file")
-SAVE_EMI :: #load("../../../overlays/ov_801aa000_023.bin")
+SAVE_EMI_PRESENT :: #exists("../../../overlays/ov_801aa000_023.bin") && #exists("../../../overlays/save_icons.bin")
+when SAVE_EMI_PRESENT {
+	@(private = "file")
+	SAVE_EMI :: #load("../../../overlays/ov_801aa000_023.bin")
+} else {
+	@(private = "file")
+	SAVE_EMI: []u8
+}
 @(private = "file")
 SAVE_EMI_SIZE :: 36104
 @(private = "file")
@@ -78,8 +85,13 @@ GAME_REGION :: 0x8011a94c
 GAME_REGION_SIZE :: 0x1650
 @(private = "file")
 SAVE_NAME :: "BASLUS-01324BOF4%02dUS"
-@(private = "file")
-SAVE_ICONS :: #load("../../../overlays/save_icons.bin") // one per save number
+when SAVE_EMI_PRESENT {
+	@(private = "file")
+	SAVE_ICONS :: #load("../../../overlays/save_icons.bin") // one per save number
+} else {
+	@(private = "file")
+	SAVE_ICONS: []u8
+}
 @(private = "file")
 SAVE_ICON :: 0x80 // offset of the 16x16 4-bit icon in the header
 @(private = "file")
@@ -103,18 +115,22 @@ save: struct {
 @(private)
 save_init :: proc() -> bool {
 	save.map_kind = hook_field(AREA_KIND, map_kind) or_return
-	if len(SAVE_EMI) != SAVE_EMI_SIZE {
-		fmt.eprintfln("autosave: SAVE.EMI image is %d bytes, expected %d", len(SAVE_EMI), SAVE_EMI_SIZE)
-		return false
+	when !SAVE_EMI_PRESENT {
+		return true
+	} else {
+		if len(SAVE_EMI) != SAVE_EMI_SIZE {
+			fmt.eprintfln("autosave: SAVE.EMI image is %d bytes, expected %d", len(SAVE_EMI), SAVE_EMI_SIZE)
+			return false
+		}
+		if len(SAVE_ICONS) != MAX_SAVE_SLOT * ICON_SIZE {
+			fmt.eprintfln("autosave: save_icons.bin is %d bytes, expected %d", len(SAVE_ICONS), MAX_SAVE_SLOT * ICON_SIZE)
+			return false
+		}
+		save.saved_map = NO_MAP
+		save.control_on = NO_MAP
+		save.field = hook_game_mode(MODE_FIELD, field_tick) or_return
+		return true
 	}
-	if len(SAVE_ICONS) != MAX_SAVE_SLOT * ICON_SIZE {
-		fmt.eprintfln("autosave: save_icons.bin is %d bytes, expected %d", len(SAVE_ICONS), MAX_SAVE_SLOT * ICON_SIZE)
-		return false
-	}
-	save.saved_map = NO_MAP
-	save.control_on = NO_MAP
-	save.field = hook_game_mode(MODE_FIELD, field_tick) or_return
-	return true
 }
 
 @(private = "file")

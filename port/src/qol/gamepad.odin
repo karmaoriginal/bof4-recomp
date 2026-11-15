@@ -276,7 +276,7 @@ input_event_watch :: proc "c" (userdata: rawptr, ev: ^sdl.Event) -> c.int {
 		gamepad_try_attach(ev.jdevice.which)
 
 	case .JOYDEVICEREMOVED:
-		gamepad_remove_generic(ev.jdevice.which)
+		gamepad_remove_generic(sdl.JoystickID(ev.jdevice.which))
 
 	case .JOYBUTTONDOWN:
 		sync.mutex_lock(&gamepad_state.lock)
@@ -683,7 +683,7 @@ apply_confirm_swap :: proc(held: u16, swap: bool) -> u16 {
 	}
 	cross := held & host.PAD_CROSS != 0
 	circle := held & host.PAD_CIRCLE != 0
-	out := held & ~(host.PAD_CROSS | host.PAD_CIRCLE)
+	out := held & ~u16(host.PAD_CROSS | host.PAD_CIRCLE)
 	if cross  { out |= host.PAD_CIRCLE }
 	if circle { out |= host.PAD_CROSS }
 	return out
