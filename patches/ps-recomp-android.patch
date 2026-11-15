@@ -102,6 +102,57 @@ index 65195c2..d5f4009 100644
  
 -VK_LOADER :: "libvulkan.so.1"
 +VK_LOADER :: "libvulkan.so" when ODIN_PLATFORM_SUBTARGET == .Android else "libvulkan.so.1"
+diff --git a/psx/boot.odin b/psx/boot.odin
+index 2c62c62..086df83 100644
+--- a/psx/boot.odin
++++ b/psx/boot.odin
+@@ -46,20 +46,26 @@ Boot :: struct {
+ // entry. False when a step fails, with the reason printed; true when the
+ // entry returns.
+ run :: proc(b: Boot) -> bool {
++	when ODIN_PLATFORM_SUBTARGET == .Android { fmt.eprintln("boot: cdrom_open:", b.disc) }
+ 	spu.cdrom_open(b.disc) or_return
+ 	exe := b.exe
+ 	if exe == nil {
++		when ODIN_PLATFORM_SUBTARGET == .Android { fmt.eprintln("boot: reading PS1 executable from disc") }
+ 		exe = disc_exe() or_return
+ 	}
++	when ODIN_PLATFORM_SUBTARGET == .Android { fmt.eprintln("boot: load_exe bytes =", len(exe)) }
+ 	pc, gp, sp, ok := cpu.load_exe(exe)
+ 	if !ok {
+ 		fmt.eprintln("not a PS-X EXE")
+ 		return false
+ 	}
+ 	cpu.trace_init() or_return
++	when ODIN_PLATFORM_SUBTARGET == .Android { fmt.eprintln("boot: setup()") }
+ 	if b.setup != nil {b.setup() or_return}
++	when ODIN_PLATFORM_SUBTARGET == .Android { fmt.eprintln("boot: platform_init()") }
+ 	host.platform_init(b.title) or_return
+ 
++	when ODIN_PLATFORM_SUBTARGET == .Android { fmt.eprintln("boot: register_funcs/overlays") }
+ 	cpu.register_funcs(b.funcs)
+ 	if b.overlays != nil {b.overlays()}
+ 	// On failure load_native prints why and the Odin functions stay; a
+@@ -73,9 +79,11 @@ run :: proc(b: Boot) -> bool {
+ 	if standalone && b.native == "" {
+ 		fmt.eprintln("psx: no native code, interpreting everything")
+ 	}
++	when ODIN_PLATFORM_SUBTARGET == .Android { fmt.eprintln("boot: hooks()") }
+ 	if b.hooks != nil {b.hooks() or_return}
+ 	cpu.watch_code()
+ 
++	when ODIN_PLATFORM_SUBTARGET == .Android { fmt.eprintln("boot: hardware & bios init") }
+ 	io.events_init()
+ 	spu.spu_init()
+ 	spu.xa_init()
+@@ -86,6 +94,7 @@ run :: proc(b: Boot) -> bool {
+ 	if b.cards != {} {bios.card_files = b.cards}
+ 	bios.memcard_init() or_return
+ 
++	when ODIN_PLATFORM_SUBTARGET == .Android { fmt.eprintfln("boot: entering PS1 CPU pc=0x%08x sp=0x%08x", pc, sp) }
+ 	cpu.state.r[28] = gp
+ 	cpu.state.r[29] = sp
+ 	cpu.state.r[30] = sp
 diff --git a/psx/host/platform.odin b/psx/host/platform.odin
 index f95efbd..644a35f 100644
 --- a/psx/host/platform.odin
