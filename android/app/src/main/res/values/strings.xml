@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Breath of Fire IV</string>
+    <string name="setup_title">Breath of Fire IV — Disc Setup</string>
+    <string name="setup_heading">Import Breath of Fire IV (US / SLUS-01324)</string>
+    <string name="setup_body">Select your legal PS1 disc image files (Breath of Fire IV.cue and both .bin tracks, or a single .bin/.iso) to copy them into app storage.\n\nYou can also copy them manually over USB to:\n%1$s</string>
+    <string name="setup_pick_button">Select Disc Files (.cue + .bin)</string>
+    <string name="setup_retry_button">Re-check Storage &amp; Launch</string>
+    <string name="setup_copying">Copying %1$s…</string>
+    <string name="setup_ready">Disc files ready! Launching…</string>
+    <string name="setup_missing">No .cue / .bin / .iso disc image found yet.</string>
+</resources>

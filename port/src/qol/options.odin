@@ -36,6 +36,8 @@ Options_Page :: enum u8 {
 	Pace,
 	System,
 	Look,
+	Controls,
+	Perf,
 	// The Setting screen's Screen command.
 	Display,
 	// Rows of the game's own Options screen (options_screen.odin).
@@ -44,21 +46,23 @@ Options_Page :: enum u8 {
 
 // Extras lists the pages up to this one.
 @(private)
-EXTRAS_LAST :: Options_Page.Look
+EXTRAS_LAST :: Options_Page.Perf
 @(private)
 EXTRAS_COUNT :: int(EXTRAS_LAST) + 1
 
 @(private)
 OPTIONS_PAGE_NAMES := [Options_Page]string {
-	.Field   = "Field",
-	.Battle  = "Battle",
-	.Balance = "Balance",
-	.Enemies = "Enemies",
-	.Pace    = "Pace",
-	.System  = "System",
-	.Look    = "Look",
-	.Display = "Display",
-	.Options = "Options",
+	.Field    = "Field",
+	.Battle   = "Battle",
+	.Balance  = "Balance",
+	.Enemies  = "Enemies",
+	.Pace     = "Pace",
+	.System   = "System",
+	.Look     = "Look",
+	.Controls = "Controls",
+	.Perf     = "Perf",
+	.Display  = "Display",
+	.Options  = "Options",
 }
 
 @(private)
@@ -71,6 +75,9 @@ Option_Value :: union {
 	^host.Detail,
 	^Enemy_AI,
 	^Ko_Hp_Loss,
+	^Touch_Mode,
+	^Touch_Layout_Mode,
+	^Perf_Profile,
 }
 
 @(private)
@@ -96,7 +103,7 @@ OPTIONS_PAGE_MAX :: 10
 
 // Options in all; checked against the table as it is built.
 @(private)
-OPTION_COUNT :: 69
+OPTION_COUNT :: 84
 
 @(private)
 options: [OPTION_COUNT]Option
@@ -149,6 +156,21 @@ options_init :: proc() {
 		{page = .Look, section = "window", key = "vignette", label = "Vignette", help = "Darken the corners of the field", value = &config.window_vignette, apply = apply_effects},
 		{page = .Look, section = "text", key = "subtitles", label = "Subtitles", help = "English lines in the opening movie", value = &config.text_subtitles},
 		{page = .Look, section = "text", key = "descriptions", label = "Gear text", help = "Gear descriptions show hidden effects", value = &config.text_descriptions},
+		{page = .Controls, section = "touch", key = "mode", label = "Touch", help = "On-screen PS1 pad: Auto hides when a gamepad is used", value = &config.touch_mode, apply = touch_apply_config},
+		{page = .Controls, section = "touch", key = "layout", label = "Pad style", help = "DualShock (sticks + d-pad), Digital, or Analog", value = &config.touch_layout, apply = touch_apply_config},
+		{page = .Controls, section = "touch", key = "opacity", label = "Opacity", help = "Visibility of the on-screen touch buttons", value = &config.touch_opacity, lo = 0.15, hi = 1.0, step = 0.05, format = "%.0f%%", percent = true},
+		{page = .Controls, section = "touch", key = "scale", label = "Size", help = "Size of the on-screen touch buttons", value = &config.touch_scale, lo = 0.6, hi = 1.5, step = 0.05, format = "%.0f%%", percent = true, apply = touch_apply_config},
+		{page = .Controls, section = "touch", key = "camera_drag", label = "Cam drag", help = "Drag open game area to rotate the camera", value = &config.touch_camera_drag},
+		{page = .Controls, section = "pad", key = "deadzone", label = "Deadzone", help = "Analog stick center deadzone (lower = more responsive)", value = &config.pad_deadzone, lo = 0.05, hi = 0.45, step = 0.05, format = "%.0f%%", percent = true},
+		{page = .Controls, section = "pad", key = "trigger_threshold", label = "Triggers", help = "L2/R2 trigger press point (lower = faster response)", value = &config.pad_trigger_threshold, lo = 0.10, hi = 0.80, step = 0.05, format = "%.0f%%", percent = true},
+		{page = .Controls, section = "pad", key = "swap_confirm", label = "Swap X/O", help = "Swap Cross and Circle (Nintendo / Japanese layout)", value = &config.pad_swap_confirm},
+		{page = .Controls, section = "pad", key = "invert_camera_x", label = "Inv R-X", help = "Invert right analog stick horizontal camera turn", value = &config.pad_invert_camera_x},
+		{page = .Controls, section = "pad", key = "rumble", label = "Rumble", help = "Controller vibration strength", value = &config.pad_rumble, lo = 0.0, hi = 1.0, step = 0.10, format = "%.0f%%", percent = true, apply = gamepad_apply_config},
+		{page = .Perf, section = "perf", key = "profile", label = "Profile", help = "Auto, Quality, Balanced, or Battery saving preset", value = &config.perf_profile, apply = mobile_opt_apply_profile},
+		{page = .Perf, section = "perf", key = "low_power_pacing", label = "Save CPU", help = "Yield between frames instead of busy-spinning (cooler)", value = &config.perf_low_power_pacing, apply = mobile_opt_apply_flags},
+		{page = .Perf, section = "perf", key = "skip_repeat_upload", label = "Skip dup", help = "Skip uploading unchanged frames (big mobile speedup)", value = &config.perf_skip_repeat_upload, apply = mobile_opt_apply_flags},
+		{page = .Perf, section = "perf", key = "raster_threads", label = "Threads", help = "Software draw threads (0 = Auto; restart to apply)", value = &config.perf_raster_threads, lo = 0, hi = f64(render.MAX_BANDS), step = 1, format = "%.0f", apply = mobile_opt_apply_flags, restart = restart_raster_threads},
+		{page = .Perf, section = "perf", key = "max_cached_rooms", label = "Room mem", help = "Instant-door rooms kept in RAM (lower saves memory)", value = &config.perf_max_cached_rooms, lo = 1, hi = MAX_WORLDS, step = 1, format = "%.0f", apply = mobile_opt_apply_flags},
 		{page = .Display, section = "window", key = "fullscreen", label = "Fullscreen", help = "Fill the screen (F11 also toggles)", value = &config.window.fullscreen, apply = apply_window},
 		{page = .Display, section = "window", key = "scale", label = "Scale", help = "Fit, or whole multiples of 640x480", value = &config.window.scale, apply = apply_window},
 		{page = .Display, section = "window", key = "detail", label = "Detail", help = "Draw the scene at 1, 2 or 4x resolution", value = &config.window.detail, apply = apply_window},
@@ -226,12 +248,21 @@ option_text :: proc(o: Option) -> string {
 		return ENEMY_AI_TEXT[v^]
 	case ^Ko_Hp_Loss:
 		return KO_HP_LOSS_TEXT[v^]
+	case ^Touch_Mode:
+		return TOUCH_MODE_TEXT[v^]
+	case ^Touch_Layout_Mode:
+		return TOUCH_LAYOUT_TEXT[v^]
+	case ^Perf_Profile:
+		return PERF_PROFILE_TEXT[v^]
 	case ^f64:
 		if o.percent && v^ == 0 {
 			return "Off"
 		}
 		return fmt.tprintf(o.format, o.percent ? v^ * 100 : v^)
 	case ^int:
+		if o.key == "raster_threads" && v^ == 0 {
+			return "Auto"
+		}
 		return fmt.tprintf(o.format, f64(v^))
 	}
 	return ""
@@ -253,6 +284,12 @@ option_ini_text :: proc(o: Option) -> string {
 		return ENEMY_AI_KEYS[v^]
 	case ^Ko_Hp_Loss:
 		return KO_HP_LOSS_KEYS[v^]
+	case ^Touch_Mode:
+		return TOUCH_MODE_KEYS[v^]
+	case ^Touch_Layout_Mode:
+		return TOUCH_LAYOUT_KEYS[v^]
+	case ^Perf_Profile:
+		return PERF_PROFILE_KEYS[v^]
 	case ^f64:
 		text := fmt.tprintf("%.4f", v^)
 		text = strings.trim_right(text, "0")
@@ -293,6 +330,24 @@ option_step :: proc(o: Option, dir: int) -> bool {
 			return false
 		}
 		v^ = Ko_Hp_Loss(next)
+	case ^Touch_Mode:
+		next := int(v^) + dir
+		if next < 0 || next > int(max(Touch_Mode)) {
+			return false
+		}
+		v^ = Touch_Mode(next)
+	case ^Touch_Layout_Mode:
+		next := int(v^) + dir
+		if next < 0 || next > int(max(Touch_Layout_Mode)) {
+			return false
+		}
+		v^ = Touch_Layout_Mode(next)
+	case ^Perf_Profile:
+		next := int(v^) + dir
+		if next < 0 || next > int(max(Perf_Profile)) {
+			return false
+		}
+		v^ = Perf_Profile(next)
 	case ^f64:
 		next := clamp(math.round(v^ / o.step + f64(dir)) * o.step, o.lo, o.hi)
 		if abs(next - v^) < o.step / 1000 {
@@ -316,7 +371,7 @@ option_step :: proc(o: Option, dir: int) -> bool {
 @(private)
 option_toggles :: proc(o: Option) -> bool {
 	#partial switch _ in o.value {
-	case ^f64, ^int, ^host.Detail, ^Enemy_AI, ^Ko_Hp_Loss:
+	case ^f64, ^int, ^host.Detail, ^Enemy_AI, ^Ko_Hp_Loss, ^Touch_Mode, ^Touch_Layout_Mode, ^Perf_Profile:
 		return false
 	}
 	return true
@@ -340,7 +395,7 @@ apply_disc :: proc() {
 	host.skip_black = config.disc_skip_black
 }
 
-@(private = "file")
+@(private)
 apply_effects :: proc() {
 	render.smooth_effects = config.window_smooth_effects
 	render.smooth_textures = config.window_smooth_textures
@@ -371,6 +426,11 @@ restart_smooth_motion :: proc() -> bool {
 @(private = "file")
 restart_hardware :: proc() -> bool {
 	return config.window_hardware != config_boot.window_hardware
+}
+
+@(private = "file")
+restart_raster_threads :: proc() -> bool {
+	return config.perf_raster_threads != config_boot.perf_raster_threads
 }
 
 // The config file: BOF4_CONFIG, or bof4.ini in the working directory.

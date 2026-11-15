@@ -70,17 +70,29 @@ will do, the port draws in software. See
 
 Settings are in `port/bof4.ini` (written when a setting changes in game;
 missing means defaults). Most can also be changed in game, from the
-camp menu's Setting > Extras page. Memory cards are
+camp menu's Setting > Extras page (including on-screen PS1 touch controls,
+gamepad deadzone/triggers/rumble, and performance profiles). Memory cards are
 `port/bof4_slot1.mcd` and `port/bof4_slot2.mcd`.
+
+## Android
+
+An Android 10+ (API 29+, `arm64-v8a` / `x86_64`) port with on-screen PlayStation
+touch controls, Bluetooth/USB gamepad support, and mobile optimizations lives in
+`android/`. After generating `port/src/rec` via `./setup.sh`, build an APK with
+`./android/build.sh --release` (requires Odin `dev-2026-11+`, Android NDK r26+,
+CMake, and Gradle). See [docs/android.md](docs/android.md) for full build,
+controller, and optimization instructions.
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `port/src/qol` | features and mods, hooked into game functions |
+| `port/src/qol` | features and mods, hooked into game functions (including touch controls, gamepad pipeline, and mobile optimizations) |
 | `port/src/rec` | generated: the recompiled game code (not in the repo) |
+| `android/` | Android Gradle/NDK project, SDL2 activity, first-run disc importer, and build scripts |
+| `patches/` | `ps-recomp-android.patch`: applied to a staged `ps-recomp` copy during builds without dirtying the submodule |
 | `tools/` | `bof4tools` (in Odin): setup, disc and overlay extractors, map block tool, research helpers; Ghidra scripts |
-| `docs/` | reverse-engineering and modding notes: start at [docs/README.md](docs/README.md) |
+| `docs/` | reverse-engineering and modding notes: start at [docs/README.md](docs/README.md) and [docs/android.md](docs/android.md) |
 | `tests/` | `run.py`: replays recorded sessions and routes headless and compares every present against a recorded reference, see [tests/README.md](tests/README.md) |
 
 ## Modding

@@ -271,57 +271,90 @@ Config :: struct {
 	save_anywhere:         bool,
 	autosave:              bool,
 	autosave_slot:         int,
-	masters_tracker:       bool,
-	masters_alerts:        bool,
+	masters_tracker:          bool,
+	masters_alerts:           bool,
+	// Touch controls ([touch])
+	touch_mode:               Touch_Mode,
+	touch_layout:             Touch_Layout_Mode,
+	touch_opacity:            f64,
+	touch_scale:              f64,
+	touch_camera_drag:        bool,
+	// Enhanced gamepad settings ([pad])
+	pad_deadzone:             f64,
+	pad_trigger_threshold:    f64,
+	pad_swap_confirm:         bool,
+	pad_invert_camera_x:      bool,
+	pad_rumble:               f64,
+	// Performance & mobile optimizations ([perf])
+	perf_profile:             Perf_Profile,
+	perf_low_power_pacing:    bool,
+	perf_skip_repeat_upload:  bool,
+	perf_raster_threads:      int,
+	perf_max_cached_rooms:    int,
 }
 
 config := Config {
-	window                 = {pause_unfocused = true, detail = .X2},
-	window_hardware        = true,
-	audio_latency_ms       = 50,
-	disc_instant_loading   = true,
-	disc_skip_black        = true,
-	encounter_rate         = 1,
-	field_minimap          = true,
-	field_instant_doors    = true,
-	field_teacher          = true,
-	text_hold_to_advance   = true,
-	text_subtitles         = true,
-	text_descriptions      = true,
-	battle_speed           = 1,
-	battle_quick_turns     = true,
-	battle_quick_idle      = true,
-	battle_quick_victory   = true,
-	battle_damage_numbers  = true,
-	battle_skip_seen       = true,
-	battle_sure_learn      = true,
-	battle_guard_ap        = true,
-	battle_examine         = true,
-	battle_identify        = true,
-	battle_combo_command   = true,
-	battle_combo_mastery   = true,
-	battle_exp_rate        = 1,
-	battle_damage_dealt    = 1,
-	battle_damage_taken    = 1,
-	battle_status_rate     = 1,
-	battle_zenny_rate      = 1,
-	minigame_speed         = 1,
-	camera_rotate_speed    = 3,
-	camera_stick           = true,
-	camera_stick_speed     = 120,
-	camera_mouse           = true,
-	camera_mouse_speed     = 0.3,
-	mouse_menus            = true,
-	camera_screen_shake    = true,
-	camera_third_person    = true,
-	move_stick             = true,
-	move_run_tilt          = 0.7,
-	move_instant_start     = true,
-	save_anywhere          = true,
-	autosave               = true,
-	autosave_slot          = MAX_SAVE_SLOT,
-	masters_tracker        = true,
-	masters_alerts         = true,
+	window                  = {pause_unfocused = true, detail = .X2},
+	window_hardware         = true,
+	audio_latency_ms        = 50,
+	disc_instant_loading    = true,
+	disc_skip_black         = true,
+	encounter_rate          = 1,
+	field_minimap           = true,
+	field_instant_doors     = true,
+	field_teacher           = true,
+	text_hold_to_advance    = true,
+	text_subtitles          = true,
+	text_descriptions       = true,
+	battle_speed            = 1,
+	battle_quick_turns      = true,
+	battle_quick_idle       = true,
+	battle_quick_victory    = true,
+	battle_damage_numbers   = true,
+	battle_skip_seen        = true,
+	battle_sure_learn       = true,
+	battle_guard_ap         = true,
+	battle_examine          = true,
+	battle_identify         = true,
+	battle_combo_command    = true,
+	battle_combo_mastery    = true,
+	battle_exp_rate         = 1,
+	battle_damage_dealt     = 1,
+	battle_damage_taken     = 1,
+	battle_status_rate      = 1,
+	battle_zenny_rate       = 1,
+	minigame_speed          = 1,
+	camera_rotate_speed     = 3,
+	camera_stick            = true,
+	camera_stick_speed      = 120,
+	camera_mouse            = true,
+	camera_mouse_speed      = 0.3,
+	mouse_menus             = true,
+	camera_screen_shake     = true,
+	camera_third_person     = true,
+	move_stick              = true,
+	move_run_tilt           = 0.7,
+	move_instant_start      = true,
+	save_anywhere           = true,
+	autosave                = true,
+	autosave_slot           = MAX_SAVE_SLOT,
+	masters_tracker         = true,
+	masters_alerts          = true,
+	touch_mode              = .Auto,
+	touch_layout            = .DualShock,
+	touch_opacity           = 0.65,
+	touch_scale             = 1.0,
+	touch_camera_drag       = true,
+	pad_deadzone            = 0.15,
+	pad_trigger_threshold   = 0.25,
+	pad_swap_confirm        = false,
+	pad_invert_camera_x     = false,
+	pad_rumble              = 1.0,
+	perf_profile            = .Auto,
+	perf_low_power_pacing   = ODIN_PLATFORM_SUBTARGET == .Android,
+	perf_skip_repeat_upload = true,
+	perf_raster_threads     = 0,
+	perf_max_cached_rooms   = 4 when ODIN_PLATFORM_SUBTARGET == .Android else 8,
 }
 
 @(private)
@@ -354,12 +387,14 @@ MAX_STICK_SPEED :: 720
 MAX_MOUSE_SPEED :: 4
 
 // Load the config file: before host.platform_init, which reads the renderer
-// choice.
+// choice and initializes SDL.
 boot :: proc() -> bool {
 	if !load_config() {
 		return false
 	}
 	config_boot = config
+	gamepad_boot_hints()
+	mobile_opt_boot()
 	render.hardware_renderer = config.window_hardware
 	return true
 }
@@ -378,12 +413,23 @@ init :: proc() -> bool {
 	core.audio_apply(config.audio_latency_ms)
 	bios.pad_set_rumble(1)
 	host.mouse_drag = config.camera_mouse
-	return host.window_apply(config.window) && encounter_init() && text_init() && camera_init() && movement_init() && save_init() && tracker_init() && popup_init() && learning_init() && combo_menu_init() && guard_init() && rewards_init() && damage_init() && ai_init() && ko_loss_init() && status_init() && victory_init() && quick_battle_init() && shake_init() && warp_init() && menu_draw_init() && button_text_init() && identify_init() && balance_init() && camp_menu_init() && setting_menu_init() && map_geometry_init() && collision_init() && sections_init() && fade_init() && inbetween_init() && interiors_init() && map_mods_init() && map_editor_init() && mouse_menus_init() && dengeki_init() && restored_init() && teacher_init() && descriptions_init() && npc_swap_init() && cinematics_init() && autoplay_init()
+	ok := host.window_apply(config.window) && encounter_init() && text_init() && camera_init() && movement_init() && save_init() && tracker_init() && popup_init() && learning_init() && combo_menu_init() && guard_init() && rewards_init() && damage_init() && ai_init() && ko_loss_init() && status_init() && victory_init() && quick_battle_init() && shake_init() && warp_init() && menu_draw_init() && button_text_init() && identify_init() && balance_init() && camp_menu_init() && setting_menu_init() && map_geometry_init() && collision_init() && sections_init() && fade_init() && inbetween_init() && interiors_init() && map_mods_init() && map_editor_init() && mouse_menus_init() && dengeki_init() && restored_init() && teacher_init() && descriptions_init() && npc_swap_init() && cinematics_init() && autoplay_init()
+	if !ok {
+		return false
+	}
+	// Install unified gamepad/touch input and mobile optimizations after
+	// mouse_menus_init so host.pad_hook chaining is guaranteed.
+	gamepad_init()
+	touch_init()
+	mobile_opt_init()
+	return true
 }
 
 // Follow the game's state once per emulated vblank.
 @(private = "file")
 vblank :: proc() {
+	gamepad_vblank()
+	touch_vblank()
 	speed_follow_mode()
 	controls_vblank()
 	button_icons_vblank()
@@ -435,6 +481,54 @@ load_config :: proc() -> bool {
 @(private)
 apply_setting :: proc(section, key, value: string) -> bool {
 	switch {
+	case section == "touch" && key == "mode":
+		for name, mode in TOUCH_MODE_KEYS {
+			if value == name {
+				config.touch_mode = mode
+				return true
+			}
+		}
+		return false
+	case section == "touch" && key == "layout":
+		for name, mode in TOUCH_LAYOUT_KEYS {
+			if value == name {
+				config.touch_layout = mode
+				return true
+			}
+		}
+		return false
+	case section == "touch" && key == "opacity":
+		return parse_range(value, 0.15, 1.0, &config.touch_opacity)
+	case section == "touch" && key == "scale":
+		return parse_range(value, 0.6, 1.5, &config.touch_scale)
+	case section == "touch" && key == "camera_drag":
+		return parse_bool(value, &config.touch_camera_drag)
+	case section == "pad" && key == "deadzone":
+		return parse_range(value, 0.05, 0.45, &config.pad_deadzone)
+	case section == "pad" && key == "trigger_threshold":
+		return parse_range(value, 0.10, 0.80, &config.pad_trigger_threshold)
+	case section == "pad" && key == "swap_confirm":
+		return parse_bool(value, &config.pad_swap_confirm)
+	case section == "pad" && key == "invert_camera_x":
+		return parse_bool(value, &config.pad_invert_camera_x)
+	case section == "pad" && key == "rumble":
+		return parse_range(value, 0.0, 1.0, &config.pad_rumble)
+	case section == "perf" && key == "profile":
+		for name, mode in PERF_PROFILE_KEYS {
+			if value == name {
+				config.perf_profile = mode
+				return true
+			}
+		}
+		return false
+	case section == "perf" && key == "low_power_pacing":
+		return parse_bool(value, &config.perf_low_power_pacing)
+	case section == "perf" && key == "skip_repeat_upload":
+		return parse_bool(value, &config.perf_skip_repeat_upload)
+	case section == "perf" && key == "raster_threads":
+		return parse_int(value, 0, int(render.MAX_BANDS), &config.perf_raster_threads)
+	case section == "perf" && key == "max_cached_rooms":
+		return parse_int(value, 1, MAX_WORLDS, &config.perf_max_cached_rooms)
 	case section == "keys" || section == "pad":
 		return parse_binding(section, key, value)
 	case section == "controller" && key == "custom":
@@ -613,6 +707,7 @@ apply_window_setting :: proc(key, value: string) -> bool {
 		}
 		return true
 	case "detail":
+		config_detail_explicit = true
 		switch value {
 		case "1":
 			w.detail = .X1

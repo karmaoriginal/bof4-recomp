@@ -10,6 +10,8 @@
 !/docs/
 !/tools/
 !/tests/
+!/patches/
+!/android/
 !/ps-recomp
 !/.gitmodules
 /tests/local/
@@ -19,6 +21,17 @@
 !/port/build.bat
 !/port/src/
 /port/src/rec/
+/port/.ps-recomp/
+/android/build/
+/android/.gradle/
+/android/app/build/
+/android/app/.cxx/
+/android/local.properties
+/android/sdl2/
+/android/app/src/main/jniLibs/
+/android/app/src/main/java/org/libsdl/
+/android/*.apk
+/android/*.aab
 /tools/bof4tools
 /tools/bof4tools.exe
 __pycache__/

@@ -12,15 +12,22 @@ import psx "ps:psx"
 import "qol"
 import "rec"
 
-main :: proc() {
-	disc_dir := len(os.args) > 1 ? os.args[1] : "../disc"
-	cue := len(os.args) > 2 ? os.args[2] : "../Breath of Fire IV.cue"
-
-	exe_path := fmt.tprintf("%s/SLUS_013.24", disc_dir)
-	exe, err := os.read_entire_file(exe_path, context.allocator)
-	if err != nil {
-		fmt.eprintln("cannot read", exe_path)
-		os.exit(1)
+run_bof4 :: proc(disc_dir, cue: string) -> bool {
+	exe: []u8
+	if disc_dir != "" {
+		exe_path := fmt.tprintf("%s/SLUS_013.24", disc_dir)
+		if os.exists(exe_path) {
+			data, err := os.read_entire_file(exe_path, context.allocator)
+			if err != nil {
+				fmt.eprintln("cannot read", exe_path, err)
+				return false
+			}
+			exe = data
+		}
+	}
+	if exe == nil && !os.exists(cue) {
+		fmt.eprintln("cannot find disc image:", cue)
+		return false
 	}
 	ok := psx.run(
 		{
@@ -39,7 +46,16 @@ main :: proc() {
 		},
 	)
 	if !ok {
-		os.exit(1)
+		return false
 	}
 	fmt.eprintln("game returned from its entry point")
+	return true
+}
+
+main :: proc() {
+	disc_dir := len(os.args) > 1 ? os.args[1] : "../disc"
+	cue := len(os.args) > 2 ? os.args[2] : "../Breath of Fire IV.cue"
+	if !run_bof4(disc_dir, cue) {
+		os.exit(1)
+	}
 }

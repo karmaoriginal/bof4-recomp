@@ -104,7 +104,7 @@ is_leader :: proc(obj: u32) -> bool {
 @(private = "file")
 screen_direction :: proc() {
 	c := &cpu.state
-	stick := host.sticks().left
+	stick := input_sticks().left
 	if config.move_stick && stick != {} && c.r[4] & DIRECTION_BITS != 0 && is_leader(c.r[5]) {
 		yaw := f64(cpu.lhu(CAMERA_YAW))
 		world := int(math.round(host.stick_angle(stick) / DEGREES_PER_DIRECTION + yaw / YAW_PER_DIRECTION))
@@ -143,7 +143,7 @@ dash_held :: proc() {
 		movement.dash_held()
 		return
 	}
-	stick := host.sticks().left
+	stick := input_sticks().left
 	tilt := math.sqrt(stick.x * stick.x + stick.y * stick.y)
 	pad := cpu.lbu(obj + OBJ_PAD)
 	dash := cpu.lbu(DASH_MASK)

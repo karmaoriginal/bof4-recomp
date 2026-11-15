@@ -87,7 +87,7 @@ import "ps:core"
 @(private = "file")
 DOOR_PICTURES :: false
 
-@(private = "file")
+@(private)
 MAX_WORLDS :: 8
 // Real field frames into a visit before its world is noted.
 @(private = "file")
@@ -651,11 +651,12 @@ world_alloc :: proc(w: ^World) {
 	}
 }
 
-// The world kept for `key`, or the slot to keep it in.
+// The world kept for `key`, or the slot to keep it in (bounded by config.perf_max_cached_rooms).
 @(private = "file")
 world_slot :: proc(key: [3]u32) -> ^World {
+	limit := clamp(config.perf_max_cached_rooms, 1, MAX_WORLDS)
 	oldest := &interiors.worlds[0]
-	for &w in interiors.worlds {
+	for &w in interiors.worlds[:limit] {
 		if w.key == key {
 			return &w
 		}
@@ -664,6 +665,56 @@ world_slot :: proc(key: [3]u32) -> ^World {
 		}
 	}
 	return oldest
+}
+
+@(private = "file")
+world_free :: proc(w: ^World) {
+	if w.start != nil {
+		free(w.start)
+		w.start = nil
+	}
+	if w.vram != nil {
+		free(w.vram)
+		w.vram = nil
+	}
+	if w.sound != nil {
+		free(w.sound)
+		w.sound = nil
+	}
+	w.ready = false
+	w.key = {}
+	w.used = 0
+}
+
+// Reclaim world snapshots beyond config.perf_max_cached_rooms.
+@(private)
+interiors_enforce_cache_limit :: proc() {
+	if interiors.noting != nil || io.preload_child {
+		return
+	}
+	limit := clamp(config.perf_max_cached_rooms, 1, MAX_WORLDS)
+	for i in limit ..< MAX_WORLDS {
+		world_free(&interiors.worlds[i])
+	}
+}
+
+// Reclaim all non-active cached interior worlds on OS low-memory pressure
+// (Android SDL_APP_LOWMEMORY).
+@(private)
+interiors_trim_cache :: proc() {
+	if interiors.noting != nil || io.preload_child {
+		return
+	}
+	freed := 0
+	for &w in interiors.worlds {
+		if w.start != nil && w.key != interiors.visit {
+			world_free(&w)
+			freed += 1
+		}
+	}
+	if freed > 0 {
+		fmt.eprintfln("interiors: reclaimed %d cached room world(s) on low memory", freed)
+	}
 }
 
 // The ready world for map `m` section `section`, any data block, or nil.

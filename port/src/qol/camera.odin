@@ -159,9 +159,9 @@ field_tick :: proc() {
 	gap := now - camera.last_tick
 	camera.last_tick = now
 	mouse := host.mouse_drag_take()
-	degrees, drag := 0.0, f64(mouse.x)
+	degrees, drag := 0.0, f64(mouse.x) + f64(touch_consume_camera_drag())
 	if config.camera_stick {
-		degrees = f64(host.sticks().right.x) * config.camera_stick_speed * f64(gap) / VBLANK_HZ
+		degrees = f64(input_sticks().right.x) * config.camera_stick_speed * f64(gap) / VBLANK_HZ
 	}
 	if cpu.lbu(OPTION_CAMERA_REVERSE) != 0 {
 		degrees, drag = -degrees, -drag

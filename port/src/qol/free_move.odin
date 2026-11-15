@@ -264,7 +264,7 @@ free_stand :: proc(obj: u32, stand: cpu.Func_Proc) {
 @(private = "file")
 held_angle :: proc(obj: u32) -> (degrees: f64, ok: bool) {
 	yaw := f64(cpu.lhu(CAMERA_YAW)) * DEGREES_PER_YAW
-	if stick := host.sticks().left; config.move_stick && stick != {} {
+	if stick := input_sticks().left; config.move_stick && stick != {} {
 		return host.stick_angle(stick) + yaw, true
 	}
 	bits := u16(cpu.lhu(obj + OBJ_PAD) & DIRECTION_BITS)

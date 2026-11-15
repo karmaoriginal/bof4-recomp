@@ -1,0 +1,69 @@
+plugins {
+    id 'com.android.application'
+}
+
+def targetAbis = (project.findProperty('bof4.abis') ?: 'arm64-v8a')
+    .toString()
+    .split(',')
+    .collect { it.trim() }
+    .findAll { !it.isEmpty() }
+
+android {
+    namespace 'com.bof4recomp.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.bof4recomp.app'
+        // Odin -subtarget:android requires API 29+ (Android 10+)
+        minSdk 29
+        targetSdk 35
+        versionCode 1
+        versionName '1.0.0'
+
+        ndk {
+            abiFilters.addAll(targetAbis)
+        }
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+            debuggable true
+        }
+        release {
+            minifyEnabled false
+            shrinkResources false
+            // Sign with debug key by default if no release keystore is configured
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['src/main/jniLibs']
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // Keep uncompressed aligned .so files for faster startup & Android 15 16KB page support
+            useLegacyPackaging = false
+        }
+    }
+}
+
+// Optional Gradle hook to rebuild libSDL2.so + libbof4.so via build-native.sh
+// when running `./gradlew assembleDebug -Pbof4.buildNative=true`.
+tasks.register('buildOdinNative', Exec) {
+    workingDir rootProject.projectDir
+    commandLine 'bash', 'build-native.sh', '--abi', targetAbis.join(',')
+}
+
+if (project.hasProperty('bof4.buildNative') && project.property('bof4.buildNative').toString() == 'true') {
+    preBuild.dependsOn(buildOdinNative)
+}

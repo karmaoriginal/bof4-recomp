@@ -1,0 +1,512 @@
+diff --git a/core/spin.odin b/core/spin.odin
+index d09db61..05f9c89 100644
+--- a/core/spin.odin
++++ b/core/spin.odin
+@@ -6,8 +6,12 @@ import "core:thread"
+ 
+ // Back off for the spin'th time while waiting on another thread: a pause
+ // for the first rounds, then yield the core.
++// Fewer spin iterations on Android so waiting threads yield instead of burning
++// big.LITTLE power and causing thermal throttling.
++SPIN_ROUNDS :: 32 when ODIN_PLATFORM_SUBTARGET == .Android else 256
++
+ spin_pause :: #force_inline proc(spin: int) {
+-	if spin < 256 {
++	if spin < SPIN_ROUNDS {
+ 		intrinsics.cpu_relax()
+ 	} else {
+ 		thread.yield()
+diff --git a/core/vulkan_linux.odin b/core/vulkan_linux.odin
+index 65195c2..d5f4009 100644
+--- a/core/vulkan_linux.odin
++++ b/core/vulkan_linux.odin
+@@ -1,4 +1,4 @@
+ // Vulkan loader library on Linux.
+ package core
+ 
+-VK_LOADER :: "libvulkan.so.1"
++VK_LOADER :: "libvulkan.so" when ODIN_PLATFORM_SUBTARGET == .Android else "libvulkan.so.1"
+diff --git a/psx/host/platform.odin b/psx/host/platform.odin
+index f95efbd..c6ea0c5 100644
+--- a/psx/host/platform.odin
++++ b/psx/host/platform.odin
+@@ -5,9 +5,11 @@ import "base:runtime"
+ import "core:fmt"
+ import "core:hash/xxhash"
+ import "core:os"
++import "core:simd"
+ import "core:slice"
+ import "core:strconv"
+ import "core:strings"
++import "core:thread"
+ import "core:time"
+ import sdl "vendor:sdl2"
+ 
+@@ -108,8 +110,21 @@ host: struct {
+ 	point_script: [dynamic]Scripted_Point,
+ 	// Cycles run at the last .Perf report, for its audio mix rate.
+ 	perf_cycles:   u64,
++	// Post-processing state at the last frame conversion, so repeat-upload
++	// skipping still refreshes whenever bloom/DoF/grade/vignette changes.
++	last_post:     render.Post,
++	last_bloom:    bool,
++	last_depth24:  bool,
+ }
+ 
++// Power-saving pacing: yields instead of busy-spinning the final millisecond
++// of each frame. Enabled by default on Android to prevent thermal throttling.
++low_power_pacing := ODIN_PLATFORM_SUBTARGET == .Android
++
++// Skip CPU conversion and SDL_UpdateTexture when the displayed VRAM bands
++// were not modified since the last present (saves ~50% bandwidth at 30 fps).
++skip_repeat_upload := true
++
+ @(private)
+ AUDIO_HZ :: 44100
+ 
+@@ -234,13 +249,21 @@ platform_init :: proc(title: cstring) -> bool {
+ 		return false
+ 	}
+ 	input_init()
++	win_w: i32 = 0 when ODIN_PLATFORM_SUBTARGET == .Android else WINDOW_W * 2
++	win_h: i32 = 0 when ODIN_PLATFORM_SUBTARGET == .Android else WINDOW_H * 2
++	win_flags: sdl.WindowFlags
++	when ODIN_PLATFORM_SUBTARGET == .Android {
++		win_flags = {.FULLSCREEN_DESKTOP, .RESIZABLE, .ALLOW_HIGHDPI}
++	} else {
++		win_flags = core.headless ? {.RESIZABLE, .HIDDEN} : {.RESIZABLE}
++	}
+ 	host.window = sdl.CreateWindow(
+ 		title,
+ 		sdl.WINDOWPOS_CENTERED,
+ 		sdl.WINDOWPOS_CENTERED,
+-		WINDOW_W * 2,
+-		WINDOW_H * 2,
+-		core.headless ? {.RESIZABLE, .HIDDEN} : {.RESIZABLE},
++		win_w,
++		win_h,
++		win_flags,
+ 	)
+ 	if host.window == nil {
+ 		fmt.eprintln("SDL_CreateWindow:", sdl.GetError())
+@@ -250,6 +273,9 @@ platform_init :: proc(title: cstring) -> bool {
+ 	// window events.
+ 	mouse.focused = .INPUT_FOCUS in sdl.GetWindowFlags(host.window)
+ 	host.renderer = sdl.CreateRenderer(host.window, -1, core.headless ? {.SOFTWARE} : {.ACCELERATED})
++	if host.renderer == nil && !core.headless {
++		host.renderer = sdl.CreateRenderer(host.window, -1, {})
++	}
+ 	if host.renderer == nil {
+ 		fmt.eprintln("SDL_CreateRenderer:", sdl.GetError())
+ 		return false
+@@ -335,11 +361,19 @@ poll_events :: proc() {
+ 				window_key(ev.key)
+ 			}
+ 		case .MOUSEBUTTONDOWN, .MOUSEBUTTONUP:
++			// Ignore synthetic touch-to-mouse events so touching the screen
++			// never triggers Mouse Left (PAD_CROSS) or switches prompts to PC.
++			if ev.button.which == sdl.TOUCH_MOUSEID {
++				continue
++			}
+ 			if ev.type == .MOUSEBUTTONDOWN {
+ 				core.device_used(.Keyboard)
+ 			}
+ 			mouse_button(ev.button)
+ 		case .MOUSEMOTION:
++			if ev.motion.which == sdl.TOUCH_MOUSEID {
++				continue
++			}
+ 			mouse_motion(ev.motion)
+ 		case .MOUSEWHEEL:
+ 			core.device_used(.Keyboard)
+@@ -348,6 +382,21 @@ poll_events :: proc() {
+ 			window_button(sdl.GameControllerButton(ev.cbutton.button))
+ 		case .WINDOWEVENT:
+ 			window_event(ev.window)
++		case .APP_TERMINATING:
++			host.quit = true
++		case .APP_WILLENTERBACKGROUND, .APP_DIDENTERBACKGROUND:
++			if !host.unpaced && !window.paused {
++				set_paused(true, true)
++			}
++		case .APP_WILLENTERFOREGROUND, .APP_DIDENTERFOREGROUND:
++			if window.focus_paused {
++				set_paused(false, false)
++				pacing_rebase()
++			}
++		case .APP_LOWMEMORY:
++			if low_memory_hook != nil {
++				low_memory_hook()
++			}
+ 		}
+ 	}
+ }
+@@ -402,7 +451,7 @@ VSYNC_SHOWS_MAX :: 4
+ render_set_vsync: proc "c" (renderer: ^sdl.Renderer, vsync: sdl.bool) -> i32
+ 
+ @(private)
+-SDL_LIBRARY :: "SDL2.dll" when ODIN_OS == .Windows else "libSDL2-2.0.so.0"
++SDL_LIBRARY :: "SDL2.dll" when ODIN_OS == .Windows else ("libSDL2.so" when ODIN_PLATFORM_SUBTARGET == .Android else "libSDL2-2.0.so.0")
+ 
+ @(private)
+ vsync_update :: proc(paced: bool) {
+@@ -577,17 +626,48 @@ convert_rows :: proc(c: ^Convert, r0, r1: i32) #no_bounds_check {
+ 				}
+ 				continue
+ 			}
+-			for px in 0 ..< fw {
+-				dst[o] = line[(x << k + px) & (t.w - 1)] & 0xffffff
+-				o += 1
++			x0 := (x << k) & (t.w - 1)
++			if x0 + fw <= t.w {
++				src_row := line[x0:][:fw]
++				for px in 0 ..< fw {
++					dst[o + int(px)] = src_row[px] & 0xffffff
++				}
++				o += int(fw)
++			} else {
++				for px in 0 ..< fw {
++					dst[o] = line[(x << k + px) & (t.w - 1)] & 0xffffff
++					o += 1
++				}
+ 			}
+ 			continue
+ 		}
+ 		line := t.pix[vy * t.w:][:t.w]
+-		for px in 0 ..< fw {
+-			c := u32(line[(x << k + px) & (t.w - 1)])
+-			dst[o] = (c & 0x1f) << 19 | (c >> 5 & 0x1f) << 11 | (c >> 10 & 0x1f) << 3
+-			o += 1
++		x0 := x & (t.w - 1)
++		if x0 + fw <= t.w {
++			U :: #simd[4]u32
++			src_row := line[x0:][:fw]
++			px: i32 = 0
++			for ; px + 4 <= fw; px += 4 {
++				v := U{u32(src_row[px]), u32(src_row[px + 1]), u32(src_row[px + 2]), u32(src_row[px + 3])}
++				res := simd.shl(v & U(0x1f), U(19)) | simd.shl(simd.shr(v, U(5)) & U(0x1f), U(11)) | simd.shl(simd.shr(v, U(10)) & U(0x1f), U(3))
++				arr := simd.to_array(res)
++				dst[o] = arr[0]
++				dst[o + 1] = arr[1]
++				dst[o + 2] = arr[2]
++				dst[o + 3] = arr[3]
++				o += 4
++			}
++			for ; px < fw; px += 1 {
++				c := u32(src_row[px])
++				dst[o] = (c & 0x1f) << 19 | (c >> 5 & 0x1f) << 11 | (c >> 10 & 0x1f) << 3
++				o += 1
++			}
++		} else {
++			for px in 0 ..< fw {
++				c := u32(line[(x + px) & (t.w - 1)])
++				dst[o] = (c & 0x1f) << 19 | (c >> 5 & 0x1f) << 11 | (c >> 10 & 0x1f) << 3
++				o += 1
++			}
+ 		}
+ 	}
+ }
+@@ -693,6 +773,7 @@ render_scale_apply :: proc() -> bool {
+ 		return false
+ 	}
+ 	host.shown_w, host.shown_h = 0, 0
++	render.vram_dirty_bands = ~u32(0)
+ 	return texture_filter_apply()
+ }
+ 
+@@ -709,18 +790,47 @@ present :: proc() {
+ 	}
+ 	render_scale_apply()
+ 	host.last_mark, host.frame_mark = host.frame_mark, -1
+-	if gpu.display.w > 0 && gpu.display.h > 0 {
+-		convert_display()
+-	}
+-	if skip_black {
+-		host.black = frame_black()
++	// Fast repeat-frame skip: when nothing drew to the displayed VRAM bands,
++	// no extra smooth-motion frame is pending, and post-processing is unchanged,
++	// reuse host.texture as-is without re-converting or re-uploading pixels.
++	skip_upload := false
++	if skip_repeat_upload && !core.headless && core.dump_dir() == "" &&
++		gpu.display.enabled && gpu.display.w > 0 && gpu.display.h > 0 &&
++		hold_picture == 0 && !host.holding && host.fade == 0 && !render.extra.ready &&
++		display_repeats() && gpu.display.depth24 == host.last_depth24 {
++		fw, fh := frame_size()
++		disp_mask := render.vram_display_mask(gpu.display.y, gpu.display.h)
++		post_now := render.post_now()
++		if host.shown_w == fw && host.shown_h == fh &&
++			(render.vram_dirty_bands & disp_mask) == 0 &&
++			post_now == host.last_post && render.bloom_effects == host.last_bloom {
++			skip_upload = true
++		}
+ 	}
+-	if instant_loading && spu.cd_loading() {
+-		picture_still()
++	if !skip_upload {
++		if gpu.display.w > 0 && gpu.display.h > 0 {
++			convert_display()
++			host.last_post = render.post_now()
++			host.last_bloom = render.bloom_effects
++			host.last_depth24 = gpu.display.depth24
++			render.vram_dirty_bands &~= render.vram_display_mask(gpu.display.y, gpu.display.h)
++		}
++		if skip_black {
++			host.black = frame_black()
++		}
++		if instant_loading && spu.cd_loading() {
++			picture_still()
++		} else {
++			host.still = 0
++		}
++		dump_frame()
+ 	} else {
+-		host.still = 0
++		if instant_loading && spu.cd_loading() {
++			host.still += 1
++		} else {
++			host.still = 0
++		}
+ 	}
+-	dump_frame()
+ 	if hold_picture > 0 {
+ 		// The picture on screen stays in its texture; the next live one
+ 		// goes to the other.
+@@ -737,7 +847,7 @@ present :: proc() {
+ 		} else if host.fade > 0 {
+ 			host.fade -= 1
+ 		}
+-		if gpu.display.enabled && gpu.display.w > 0 && gpu.display.h > 0 {
++		if !skip_upload && gpu.display.enabled && gpu.display.w > 0 && gpu.display.h > 0 {
+ 			fw, fh := frame_size()
+ 			src := sdl.Rect{0, 0, fw, fh}
+ 			sdl.UpdateTexture(host.texture, &src, &frame_pixels()[0], fw * 4)
+@@ -928,6 +1038,9 @@ platform_frame :: proc() {
+ 		// RenderPresent already waited for the display; keep the origin
+ 		// current so sleep pacing resumes from here if vsync goes off.
+ 		pacing_rebase()
++		// Poll fresh input right after vsync wait, immediately before the next
++		// emulated vblank reads the pad, eliminating up to 1 frame of lag.
++		poll_events()
+ 		return
+ 	}
+ 	due := vblank_due_ns(cpu.presents)
+@@ -936,14 +1049,25 @@ platform_frame :: proc() {
+ 		if remaining <= 0 {
+ 			break
+ 		}
+-		if remaining > 1_000_000 {
+-			time.sleep(time.Duration(remaining - 500_000))
++		if low_power_pacing {
++			if remaining > 350_000 {
++				time.sleep(time.Duration(remaining - 150_000))
++			} else {
++				thread.yield()
++			}
++		} else {
++			if remaining > 1_000_000 {
++				time.sleep(time.Duration(remaining - 500_000))
++			}
+ 		}
+ 	}
+ 	if i64(time.tick_since(host.start)) > vblank_due_ns(cpu.presents + 6) {
+ 		// Fell behind (slow frame or debugger stop): resync instead of racing.
+ 		pacing_rebase()
+ 	}
++	// Poll fresh input right after frame pacing sleep so button presses and
++	// touches that occurred during the wait reach the very next vblank.
++	poll_events()
+ }
+ 
+ // Copy the display-sized area at VRAM (x, y) as extra picture `step`, shown
+diff --git a/psx/host/preload_linux.odin b/psx/host/preload_linux.odin
+index 9fb0dc6..e06d08e 100644
+--- a/psx/host/preload_linux.odin
++++ b/psx/host/preload_linux.odin
+@@ -17,6 +17,10 @@ PR_SET_PDEATHSIG :: 1
+ // pass too; it has no hi-res target, so it never reads the pass's saved
+ // picture (on Vulkan, a mapping it shares with the parent).
+ preload_fork :: proc() -> (pid: i32, ok: bool) {
++	// Android forbids fork() in multi-threaded native activities (Binder/ART/SDL).
++	when ODIN_PLATFORM_SUBTARGET == .Android {
++		return 0, false
++	}
+ 	render.raster_sync()
+ 	// The child mixes on its own thread alone, from where the parent's mix
+ 	// stands.
+diff --git a/psx/host/window.odin b/psx/host/window.odin
+index 24d8bc9..0e5c2d4 100644
+--- a/psx/host/window.odin
++++ b/psx/host/window.odin
+@@ -116,6 +116,23 @@ set_fullscreen :: proc(on: bool) -> bool {
+ // reports whether the key was used.
+ key_hook: proc(k: sdl.KeyboardEvent) -> bool
+ 
++// Drawn directly on the SDL renderer just before RenderPresent (after window
++// dumps/captures), including on 120/240 Hz vsync repeats: used for full-screen
++// touch controls.
++overlay_render_hook: proc(r: ^sdl.Renderer)
++
++// Called when the OS signals low memory (Android APP_LOWMEMORY).
++low_memory_hook: proc()
++
++// Toggle pause from game/UI hooks (e.g. touch quick menu or Android Back).
++window_set_paused :: proc(on: bool) {
++	set_paused(on, false)
++}
++
++window_is_paused :: proc() -> bool {
++	return window.paused
++}
++
+ // Window keys: fullscreen, pause and the debug snapshot. Reports whether the
+ // key was used.
+ @(private)
+@@ -217,11 +234,17 @@ draw :: proc() {
+ 			core.capture_frame(pix, w, h, cpu.presents)
+ 		}
+ 	}
++	if overlay_render_hook != nil {
++		overlay_render_hook(host.renderer)
++	}
+ 	sdl.RenderPresent(host.renderer)
+ 	for _ in 1 ..< (host.vsync ? host.vsync_shows : 1) {
+ 		// The back buffer is undefined after a present: draw it again.
+ 		compose()
+ 		osd_draw()
++		if overlay_render_hook != nil {
++			overlay_render_hook(host.renderer)
++		}
+ 		sdl.RenderPresent(host.renderer)
+ 	}
+ }
+diff --git a/psx/render/gpu.odin b/psx/render/gpu.odin
+index f0cfbc3..155460b 100644
+--- a/psx/render/gpu.odin
++++ b/psx/render/gpu.odin
+@@ -21,6 +21,37 @@ VRAM_H :: 512
+ 
+ vram: [VRAM_W * VRAM_H]u16
+ 
++// Bitmask of 16-row VRAM bands modified since last cleared (32 * 16 = 512 rows).
++vram_dirty_bands: u32 = ~u32(0)
++
++// Mark VRAM rows y0..=y1 as modified.
++vram_mark_bands :: #force_inline proc(y0, y1: i32) {
++	if y1 < y0 || y0 < 0 || y1 >= VRAM_H {
++		vram_dirty_bands = ~u32(0)
++		return
++	}
++	b0 := u32(y0 >> 4)
++	b1 := u32(y1 >> 4)
++	if b1 >= 31 {
++		vram_dirty_bands |= (~u32(0)) << b0
++	} else {
++		vram_dirty_bands |= ((u32(1) << (b1 - b0 + 1)) - 1) << b0
++	}
++}
++
++// Band bitmask covering display rows y ..< y + h (conservatively all bands on wrap).
++vram_display_mask :: #force_inline proc(y, h: i32) -> u32 {
++	if h <= 0 || y < 0 || y + h > VRAM_H {
++		return ~u32(0)
++	}
++	b0 := u32(y >> 4)
++	b1 := u32((y + h - 1) >> 4)
++	if b1 >= 31 {
++		return (~u32(0)) << b0
++	}
++	return ((u32(1) << (b1 - b0 + 1)) - 1) << b0
++}
++
+ // What the camera sees through (see_through, not a PS1 feature): faded
+ // pixels are drawn as usual into this layer, starting from the target pixel
+ // under them, the nearest keeping the pixel along with its opacity, and
+@@ -2277,6 +2308,7 @@ gp0_exec :: proc(words: []u32) {
+ 		op := w >> 24
+ 		n := cmd_len(op)
+ 		if n == 0 {
++			vram_mark_bands(gpu.y1, gpu.y2)
+ 			// Polyline: vertices until the 0x5xxx5xxx terminator.
+ 			m := Prim_Mode {
+ 				semi    = op & 0x02 != 0,
+@@ -2317,8 +2349,10 @@ gp0_exec :: proc(words: []u32) {
+ 		cmd := words[i:][:n]
+ 		switch op >> 5 {
+ 		case 1:
++			vram_mark_bands(gpu.y1, gpu.y2)
+ 			exec_polygon(cmd)
+ 		case 2:
++			vram_mark_bands(gpu.y1, gpu.y2)
+ 			m := Prim_Mode {
+ 				semi    = op & 0x02 != 0,
+ 				gouraud = op & 0x10 != 0,
+@@ -2339,11 +2373,15 @@ gp0_exec :: proc(words: []u32) {
+ 				line_issue(&t, &e, &m, a, b)
+ 			}
+ 		case 3:
++			vram_mark_bands(gpu.y1, gpu.y2)
+ 			exec_rect(cmd)
+ 		case 4:
+ 			sx, sy := i32(cmd[1] & 0x3ff), i32((cmd[1] >> 16) & 0x1ff)
+ 			dx, dy := i32(cmd[2] & 0x3ff), i32((cmd[2] >> 16) & 0x1ff)
+ 			cw, ch := i32(cmd[3] & 0x3ff), i32((cmd[3] >> 16) & 0x1ff)
++			if cw > 0 && ch > 0 {
++				vram_mark_bands(dy, dy + ch - 1)
++			}
+ 			move_image(sx, sy, dx, dy, cw, ch)
+ 		case 7:
+ 			exec_env(w)
+@@ -2353,6 +2391,9 @@ gp0_exec :: proc(words: []u32) {
+ 				y := i32((cmd[1] >> 16) & 0x1ff)
+ 				fw := i32(((cmd[2] & 0x3ff) + 0xf) & ~u32(0xf))
+ 				fh := i32((cmd[2] >> 16) & 0x1ff)
++				if fw > 0 && fh > 0 {
++					vram_mark_bands(y, y + fh - 1)
++				}
+ 				fill_rect(x, y, fw, fh, rgb24_to_15(w))
+ 			}
+ 		}
+@@ -2400,6 +2441,7 @@ move_pixels :: proc(t: ^Target, pix: []$P, sx, sy, dx, dy, w, h: i32) #no_bounds
+ // w, h; none when empty) keeps what it holds, in both.
+ vram_replace :: proc(src: ^[VRAM_W * VRAM_H]u16, keep := [4]i32{}) #no_bounds_check {
+ 	raster_sync()
++	vram_dirty_bands = ~u32(0)
+ 	x0, y0 := clamp(keep.x, 0, VRAM_W), clamp(keep.y, 0, VRAM_H)
+ 	x1, y1 := clamp(keep.x + keep.z, x0, VRAM_W), clamp(keep.y + keep.w, y0, VRAM_H)
+ 	for y in i32(0) ..< VRAM_H {
+@@ -2441,6 +2483,7 @@ vram_replace :: proc(src: ^[VRAM_W * VRAM_H]u16, keep := [4]i32{}) #no_bounds_ch
+ // textures): the hi-res target takes it as a block.
+ vram_put :: proc(x, y: i32, c: u16) #no_bounds_check {
+ 	raster_sync()
++	vram_dirty_bands |= u32(1) << u32((y & (VRAM_H - 1)) >> 4)
+ 	hi_touch(x, y, 1, 1)
+ 	vram_at(x, y)^ = c
+ 	if target_count == 2 {
+diff --git a/psx/render/raster.odin b/psx/render/raster.odin
+index 5050ecc..87a9f5b 100644
+--- a/psx/render/raster.odin
++++ b/psx/render/raster.odin
+@@ -228,12 +228,22 @@ raster_parallel :: proc(job: proc(band, bands: i32, data: rawptr), data: rawptr)
+ 	raster_launch(job, data, raster_pool())
+ }
+ 
++// Optional thread pool size override (0 = automatic, clamped to 1..MAX_BANDS).
++raster_threads_override: i32
++
+ // The pool's band count, starting the pool on first use.
+ @(private)
+ raster_pool :: proc() -> i32 {
+ 	if !raster.started {
+ 		raster.started = true
+-		raster.bands = i32(clamp(os.get_processor_core_count() / 2, 1, MAX_BANDS))
++		// Cap auto pool to 4 on Android so big.LITTLE efficiency cores do not
++		// become band-sync stragglers.
++		max_auto := 4 when ODIN_PLATFORM_SUBTARGET == .Android else MAX_BANDS
++		n := raster_threads_override
++		if n <= 0 {
++			n = i32(clamp(os.get_processor_core_count() / 2, 1, max_auto))
++		}
++		raster.bands = clamp(n, 1, MAX_BANDS)
+ 		for _ in 0 ..< raster.bands {
+ 			thread.start(thread.create(raster_worker))
+ 		}
