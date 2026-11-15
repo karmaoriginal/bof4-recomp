@@ -696,6 +696,9 @@ quick_menu_render_sdl :: proc(r: ^sdl.Renderer) {
 	if r == nil {
 		return
 	}
+	// Execute queued menu taps/keys on the main render thread so the MENU
+	// button and settings panel stay responsive even while the game is paused.
+	quick_menu_vblank()
 	out_w, out_h: c.int
 	if sdl.GetRendererOutputSize(r, &out_w, &out_h) != 0 || out_w <= 0 || out_h <= 0 {
 		return

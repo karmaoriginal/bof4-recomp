@@ -718,6 +718,8 @@ touch_render_sdl :: proc(r: ^sdl.Renderer) {
 	if r == nil {
 		return
 	}
+	// Drain deferred pause/style pills here too so unpausing works from pause_wait().
+	touch_vblank()
 	if !touch_is_visible() {
 		quick_menu_render_sdl(r)
 		return
